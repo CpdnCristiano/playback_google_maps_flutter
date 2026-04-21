@@ -212,11 +212,16 @@ class GoogleMapsPlaybackView(
                 .flat(true)
                 .zIndex(10f) // Veículo sempre no topo
         )
+        
+        // Fallback para ícone do veículo: se nulo, usa o marcador padrão Ciano
+        val effectiveIcon = vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
+        val effectiveIconFlipped = vehicleIconFlipped ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
+
         if (canRotate) {
-            vehicleMarker?.setIcon(vehicleIconNormal)
+            vehicleMarker?.setIcon(effectiveIcon)
         } else {
             val isGoingLeft = points[0].bearing > 180
-            vehicleMarker?.setIcon(if (isGoingLeft) vehicleIconNormal else vehicleIconFlipped)
+            vehicleMarker?.setIcon(if (isGoingLeft) effectiveIcon else effectiveIconFlipped)
         }
 
         val progressOptions = PolylineOptions()
@@ -393,11 +398,16 @@ class GoogleMapsPlaybackView(
         
         // Atualiza Veículo
         vehicleMarker?.position = pos
+        
+        val effectiveIcon = vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
+        val effectiveIconFlipped = vehicleIconFlipped ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
+
         if (canRotate) {
             vehicleMarker?.rotation = rotation
+            vehicleMarker?.setIcon(effectiveIcon)
         } else {
             val isGoingLeft = rotation > 180
-            vehicleMarker?.setIcon(if (isGoingLeft) vehicleIconNormal else vehicleIconFlipped)
+            vehicleMarker?.setIcon(if (isGoingLeft) effectiveIcon else effectiveIconFlipped)
         }
 
         // Só segue o veículo se o usuário não tiver mexido no mapa manualmente e não houver animação de zoom em curso
@@ -478,7 +488,11 @@ class GoogleMapsPlaybackView(
                     .position(LatLng(p.lat, p.lng))
                     .alpha(0.9f)
                     .zIndex(5f) 
-                stopIcon?.let { markerOptions.icon(it) }
+                
+                // Fallback para ícone de stop: marcador padrão vermelho (HUE_RED é o default)
+                val icon = stopIcon ?: BitmapDescriptorFactory.defaultMarker()
+                markerOptions.icon(icon)
+                
                 val marker = map.addMarker(markerOptions)
                 marker?.tag = index
                 marker?.let { stopMarkers[index] = it }

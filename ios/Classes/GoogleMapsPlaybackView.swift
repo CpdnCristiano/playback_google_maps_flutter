@@ -196,14 +196,18 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         marker.isFlat = true
         marker.rotation = canRotate ? first.bearing : 0
         
+        marker.zIndex = 10 // Veículo sempre no topo
+        
+        // Fallback para ícone do veículo: marcador padrão Ciano se nulo
+        let effectiveIcon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+        let effectiveIconFlipped = vehicleIconFlipped ?? GMSMarker.markerImage(with: .cyan)
+
         if canRotate {
-            marker.icon = vehicleIconNormal
+            marker.icon = effectiveIcon
         } else {
             let isGoingLeft = first.bearing > 180
-            marker.icon = isGoingLeft ? vehicleIconNormal : vehicleIconFlipped
+            marker.icon = isGoingLeft ? effectiveIcon : effectiveIconFlipped
         }
-        
-        marker.zIndex = 10 // Veículo sempre no topo
         marker.map = mapView
         self.vehicleMarker = marker
         
@@ -390,9 +394,12 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         
         if canRotate {
             vehicleMarker?.rotation = CLLocationDegrees(rotation)
+            vehicleMarker?.icon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
         } else {
             let isGoingLeft = rotation > 180
-            vehicleMarker?.icon = isGoingLeft ? vehicleIconNormal : vehicleIconFlipped
+            let effectiveIcon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+            let effectiveIconFlipped = vehicleIconFlipped ?? GMSMarker.markerImage(with: .cyan)
+            vehicleMarker?.icon = isGoingLeft ? effectiveIcon : effectiveIconFlipped
         }
         
         if followVehicle && !isAnimatingCamera {
