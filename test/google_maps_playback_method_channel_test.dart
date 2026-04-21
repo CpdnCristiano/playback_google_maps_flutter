@@ -1,12 +1,12 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:replay_map_native/replay_map_native_method_channel.dart';
+import 'package:google_maps_playback/google_maps_playback_method_channel.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  MethodChannelReplayMapNative platform = MethodChannelReplayMapNative();
-  const MethodChannel channel = MethodChannel('replay_map_native');
+  MethodChannelGoogleMapsPlayback platform = MethodChannelGoogleMapsPlayback();
+  const MethodChannel channel = MethodChannel('google_maps_playback');
 
   setUp(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
