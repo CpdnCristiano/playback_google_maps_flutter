@@ -69,14 +69,12 @@ class GoogleMapsPlaybackView(
     private var vehicleIconFlipped: BitmapDescriptor? = null
 
     init {
-        Log.i("GoogleMapsPlayback", "init: GoogleMapsPlaybackView criada para o ID $viewId")
         mapView.onCreate(null)
         mapView.onStart()
         mapView.onResume()
         mapView.getMapAsync(this)
         channel.setMethodCallHandler(this)
 
-        // Parse params
         creationParams?.let { params ->
             val rawPoints = params["points"] as? List<Map<String, Any>>
             val pts = mutableListOf<GoogleMapsPlaybackPoint>()
@@ -101,18 +99,14 @@ class GoogleMapsPlaybackView(
                     vehicleIconNormal = BitmapDescriptorFactory.fromBitmap(bitmap)
                     val flipped = flipBitmapHorizontally(bitmap)
                     vehicleIconFlipped = BitmapDescriptorFactory.fromBitmap(flipped)    
-                } catch (e: Exception) {
-                    Log.e("GoogleMapsPlayback", "init: Erro ao decodificar ícone do veículo: ${e.message}")
-                }
+                } catch (e: Exception) { }
             }
 
             (params["stopIcon"] as? ByteArray)?.let { bytes ->
                 try {
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     stopIcon = BitmapDescriptorFactory.fromBitmap(bitmap)
-                } catch (e: Exception) {
-                    Log.e("GoogleMapsPlayback", "init: Erro ao decodificar ícone de stop: ${e.message}")
-                }
+                } catch (e: Exception) { }
             }
 
             initialMapType = (params["mapType"] as? Int) ?: GoogleMap.MAP_TYPE_NORMAL
@@ -151,7 +145,6 @@ class GoogleMapsPlaybackView(
     override fun onMapReady(map: GoogleMap) {
         googleMap = map
         
-        // Detecta se o usuário mexeu no mapa manualmente
         map.setOnCameraMoveStartedListener { reason ->
             if (reason == GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE) {
                 followVehicle = false
@@ -159,11 +152,10 @@ class GoogleMapsPlaybackView(
             }
         }
 
-        // Quando o mapa para de mover (soltou o dedo), volta a seguir após 500ms
         map.setOnCameraIdleListener {
             if (!followVehicle) {
                 followHandler.removeCallbacks(followRunnable)
-                followHandler.postDelayed(followRunnable, 500L) // 500ms
+                followHandler.postDelayed(followRunnable, 500L)
             }
         }
         
@@ -184,12 +176,11 @@ class GoogleMapsPlaybackView(
         map.mapType = initialMapType
         map.isTrafficEnabled = isTrafficEnabled
         
-        // Habilita gestos de interação
         map.uiSettings.isZoomGesturesEnabled = true
         map.uiSettings.isScrollGesturesEnabled = true
         map.uiSettings.isTiltGesturesEnabled = true
         map.uiSettings.isRotateGesturesEnabled = true
-        map.uiSettings.isZoomControlsEnabled = false // Usamos nossos próprios botões
+        map.uiSettings.isZoomControlsEnabled = false
         
         if (isDarkMode) {
             initialStyle?.let { style ->
@@ -210,10 +201,9 @@ class GoogleMapsPlaybackView(
                 .rotation(if (canRotate) points[0].bearing.toFloat() else 0f)
                 .anchor(0.5f, 0.5f)
                 .flat(true)
-                .zIndex(10f) // Veículo sempre no topo
+                .zIndex(10f)
         )
         
-        // Fallback para ícone do veículo: se nulo, usa o marcador padrão Ciano
         val effectiveIcon = vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
         val effectiveIconFlipped = vehicleIconFlipped ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
 
@@ -228,7 +218,7 @@ class GoogleMapsPlaybackView(
             .width(12f)
             .color(polylineColor)
             .geodesic(true)
-            .zIndex(2f) // Linha abaixo do veículo
+            .zIndex(2f)
         progressPolyline = map.addPolyline(progressOptions)
 
         if (showStops) renderStops()
@@ -330,7 +320,6 @@ class GoogleMapsPlaybackView(
             return
         }
 
-        // Velocidade base (vinda do Flutter)
         val remainingDist = endDist - startDist
         val durationMs = ((remainingDist / baseSpeed) * 1000 / playbackSpeed).toLong()
 
@@ -342,7 +331,6 @@ class GoogleMapsPlaybackView(
                 currentGlobalDistance = (anim.animatedValue as Float).toDouble()
                 updateVehiclePosition(currentGlobalDistance)
                 
-                // Envia o progresso virtual (índice + t) para o Flutter
                 val segmentIndex = getSegmentIndexForDistance(currentGlobalDistance)
                 val segmentStartDist = cumulativeDistances[segmentIndex]
                 val segmentEndDist = cumulativeDistances[segmentIndex + 1]
@@ -352,7 +340,6 @@ class GoogleMapsPlaybackView(
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
-                    // Só resetamos se a animação realmente chegou ao fim do trajeto total
                     if (isPlaying && animator == animation && currentGlobalDistance >= (totalDistance - 0.1)) {
                         currentGlobalDistance = 0.0
                         isPlaying = false
@@ -369,7 +356,6 @@ class GoogleMapsPlaybackView(
         
         val idx = getSegmentIndexForDistance(distance)
         
-        // Garante que todas as paradas passadas (incluindo a atual) sejam desenhadas
         if (showStops) {
             for (i in 0..idx) {
                 checkAndAddStop(i)
@@ -392,11 +378,9 @@ class GoogleMapsPlaybackView(
         if (delta < -180) delta += 360
         val rotation = start.bearing.toFloat() + delta * t
 
-        // Atualiza Rastro
         trailPoints.add(pos)
         progressPolyline?.points = trailPoints
         
-        // Atualiza Veículo
         vehicleMarker?.position = pos
         
         val effectiveIcon = vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
@@ -410,12 +394,10 @@ class GoogleMapsPlaybackView(
             vehicleMarker?.setIcon(if (isGoingLeft) effectiveIcon else effectiveIconFlipped)
         }
 
-        // Só segue o veículo se o usuário não tiver mexido no mapa manualmente e não houver animação de zoom em curso
         if (followVehicle && !isAnimatingCamera) {
             googleMap?.moveCamera(CameraUpdateFactory.newLatLng(pos))
         }
 
-        // Lógica de Pausa nos Stops
         if (showStops && points[idx].isStop && idx != lastStopIndexPassed && !isPausedForStop) {
             lastStopIndexPassed = idx
             pauseForStop()
@@ -426,7 +408,6 @@ class GoogleMapsPlaybackView(
         isPausedForStop = true
         animator?.pause()
         
-        // 2 segundos divididos pela velocidade (ex: 2000ms / 2x = 1000ms)
         val pauseDuration = (2000L / playbackSpeed.coerceAtLeast(1)).coerceAtLeast(100L)
         
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -470,7 +451,6 @@ class GoogleMapsPlaybackView(
     }
 
     private fun updateProgressTrail(currentPos: LatLng, index: Int) {
-        // Método mantido para compatibilidade com o seekTo, reconstrói o rastro até o ponto desejado
         trailPoints.clear()
         for (i in 0 until index) {
             trailPoints.add(LatLng(points[i].lat, points[i].lng))
@@ -489,7 +469,6 @@ class GoogleMapsPlaybackView(
                     .alpha(0.9f)
                     .zIndex(5f) 
                 
-                // Fallback para ícone de stop: marcador padrão vermelho (HUE_RED é o default)
                 val icon = stopIcon ?: BitmapDescriptorFactory.defaultMarker()
                 markerOptions.icon(icon)
                 
@@ -502,10 +481,9 @@ class GoogleMapsPlaybackView(
 
     private fun renderStops() {
         val map = googleMap ?: return
-        clearStops() // Limpa para reconstruir o estado correto no Seek/Toggle
+        clearStops()
         val currentIdx = getSegmentIndexForDistance(currentGlobalDistance)
         
-        // Adiciona as paradas até o ponto atual
         for (i in 0..currentIdx) {
             if (points[i].isStop) {
                 checkAndAddStop(i)

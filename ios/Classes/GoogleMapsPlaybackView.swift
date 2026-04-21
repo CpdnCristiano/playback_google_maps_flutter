@@ -81,7 +81,7 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
     private func parseParams(_ params: [String: Any]) {
         if let rawPoints = params["points"] as? [[String: Any]] {
             var pts: [GoogleMapsPlaybackPoint] = []
-            for (index, dict) in rawPoints.enumerated() {
+            for (_, dict) in rawPoints.enumerated() {
                 pts.append(GoogleMapsPlaybackPoint(
                     lat: dict["lat"] as? Double ?? 0.0,
                     lng: dict["lng"] as? Double ?? 0.0,
@@ -169,13 +169,11 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         mapView.mapType = initialMapType
         mapView.isTrafficEnabled = isTrafficEnabled
         
-        // Habilita gestos de interação
         mapView.settings.zoomGestures = true
         mapView.settings.scrollGestures = true
         mapView.settings.tiltGestures = true
         mapView.settings.rotateGestures = true
         
-        // Reseta qualquer ângulo ou rotação anterior
         mapView.animate(toBearing: 0)
         mapView.animate(toViewingAngle: 0)
         
@@ -196,9 +194,8 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         marker.isFlat = true
         marker.rotation = canRotate ? first.bearing : 0
         
-        marker.zIndex = 10 // Veículo sempre no topo
+        marker.zIndex = 10 
         
-        // Fallback para ícone do veículo: marcador padrão Ciano se nulo
         let effectiveIcon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
         let effectiveIconFlipped = vehicleIconFlipped ?? GMSMarker.markerImage(with: .cyan)
 
@@ -215,16 +212,15 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         let polyline = GMSPolyline(path: path)
         polyline.strokeColor = polylineColor
         polyline.strokeWidth = 6.0
-        polyline.zIndex = 2 // Rastro abaixo do veículo
+        polyline.zIndex = 2 
         polyline.map = mapView
         self.progressPolyline = polyline
         
-        mapView.delegate = self // Escuta cliques
+        mapView.delegate = self 
         
         if showStops { renderStops() }
     }
     
-    // MARK: - GMSMapViewDelegate
     public func mapView(_ mapView: GMSMapView, didTap marker: GMSMarker) -> Bool {
         if let index = marker.userData as? Int {
             seek(to: index)
@@ -336,7 +332,6 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         let deltaTime = currentTime - lastFrameTime
         lastFrameTime = currentTime
         
-        // Velocidade base (vinda do Flutter)
         let frameDistance = deltaTime * baseSpeed * Double(playbackSpeed)
         
         currentGlobalDistance += frameDistance
@@ -351,7 +346,6 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         
         updateVehiclePosition(distance: currentGlobalDistance)
         
-        // Progresso virtual (index + localT) para compatibilidade com o Flutter
         let idx = getSegmentIndexForDistance(currentGlobalDistance)
         let segmentStartDist = cumulativeDistances[idx]
         let segmentEndDist = cumulativeDistances[idx + 1]
@@ -406,11 +400,9 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
             mapView.animate(with: GMSCameraUpdate.setTarget(pos))
         }
 
-        // Atualiza Rastro (Simples e funcional)
         trailPath.add(pos)
         progressPolyline?.path = trailPath
 
-        // Lógica de Pausa nos Stops (AGORA NO FINAL)
         if showStops && points[idx].isStop && idx != lastStopIndexPassed && !isPausedForStop {
             lastStopIndexPassed = idx
             pauseForStop()
@@ -421,7 +413,6 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         isPausedForStop = true
         displayLink?.isPaused = true
         
-        // 2 segundos base, dividido pela velocidade
         let pauseTime = max(0.1, 2.0 / Double(playbackSpeed))
         
         DispatchQueue.main.asyncAfter(deadline: .now() + pauseTime) { [weak self] in
@@ -466,7 +457,6 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
     }
     
     private func updateProgressTrail(upTo currentPos: CLLocationCoordinate2D, at index: Int) {
-        // Método para reconstrução total (usado no seek)
         trailPath = GMSMutablePath()
         for i in 0..<index {
             trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
@@ -482,17 +472,16 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
             marker.icon = stopIcon
             marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
             marker.userData = index
-            marker.zIndex = 5 // Abaixo do veículo (10)
+            marker.zIndex = 5 
             marker.map = mapView
             stopMarkers[index] = marker
         }
     }
     
     private func renderStops() {
-        clearStops() // Limpa para reconstruir o estado correto no Seek/Toggle
+        clearStops() 
         let currentIdx = getSegmentIndexForDistance(currentGlobalDistance)
         
-        // Adiciona apenas o que falta
         for i in 0...currentIdx {
             if points[i].isStop {
                 checkAndAddStop(at: i)

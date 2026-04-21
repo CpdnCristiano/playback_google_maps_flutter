@@ -52,7 +52,7 @@ class GoogleMapsPlayback extends StatelessWidget {
     this.stopIcon,
     this.showStops = true,
     this.polylineColor = Colors.blue,
-    this.mapType = 1, // Normal
+    this.mapType = 1,
     this.showTraffic = false,
     this.isDark = false,
     this.darkModeStyle,
