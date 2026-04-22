@@ -42,12 +42,17 @@ class GoogleMapsPlaybackView(
     private var isDarkMode: Boolean = false
     private var initialStyle: String? = null
     private var canRotate: Boolean = true
+    private var dynamicRotation: Boolean = false
     private var baseSpeed: Double = 60.0
     
     private var vehicleMarker: Marker? = null
     private var progressPolyline: Polyline? = null
     private val trailPoints = mutableListOf<LatLng>()
     private val stopMarkers = mutableMapOf<Int, Marker>()
+    
+    private val customMarkers = mutableMapOf<String, Marker>()
+    private val customCircles = mutableMapOf<String, Circle>()
+    private val customPolylines = mutableMapOf<String, Polyline>()
 
     private var currentGlobalDistance = 0.0
     private var lastStopIndexPassed = -1
@@ -114,6 +119,7 @@ class GoogleMapsPlaybackView(
             isDarkMode = (params["isDark"] as? Boolean) ?: false
             initialStyle = params["style"] as? String
             canRotate = (params["canRotate"] as? Boolean) ?: true
+            dynamicRotation = (params["dynamicRotation"] as? Boolean) ?: false
 
             val polylineColorHex = (params["polylineColor"] as? String) ?: "#0000FF"
             try {
@@ -176,11 +182,20 @@ class GoogleMapsPlaybackView(
         map.mapType = initialMapType
         map.isTrafficEnabled = isTrafficEnabled
         
-        map.uiSettings.isZoomGesturesEnabled = true
-        map.uiSettings.isScrollGesturesEnabled = true
-        map.uiSettings.isTiltGesturesEnabled = true
-        map.uiSettings.isRotateGesturesEnabled = true
+        map.uiSettings.isZoomGesturesEnabled = (creationParams?.get("zoomGesturesEnabled") as? Boolean) ?: true
+        map.uiSettings.isScrollGesturesEnabled = (creationParams?.get("scrollGesturesEnabled") as? Boolean) ?: true
+        map.uiSettings.isTiltGesturesEnabled = (creationParams?.get("tiltGesturesEnabled") as? Boolean) ?: true
+        map.uiSettings.isRotateGesturesEnabled = (creationParams?.get("rotateGesturesEnabled") as? Boolean) ?: true
         map.uiSettings.isZoomControlsEnabled = false
+        
+        val showUserLocation = (creationParams?.get("showUserLocation") as? Boolean) ?: false
+        if (showUserLocation) {
+            try {
+                map.isMyLocationEnabled = true
+            } catch (e: SecurityException) {
+                // Ignore if permissions are not granted
+            }
+        }
         
         if (isDarkMode) {
             initialStyle?.let { style ->
@@ -195,10 +210,15 @@ class GoogleMapsPlaybackView(
         val firstPoint = LatLng(points[0].lat, points[0].lng)
         map.moveCamera(CameraUpdateFactory.newLatLngZoom(firstPoint, 16f))
 
+        var initialRotation = if (canRotate) points[0].bearing.toFloat() else 0f
+        if (canRotate && dynamicRotation && points.size > 1) {
+            initialRotation = computeHeading(points[0].lat, points[0].lng, points[1].lat, points[1].lng).toFloat()
+        }
+
         vehicleMarker = map.addMarker(
             MarkerOptions()
                 .position(firstPoint)
-                .rotation(if (canRotate) points[0].bearing.toFloat() else 0f)
+                .rotation(initialRotation)
                 .anchor(0.5f, 0.5f)
                 .flat(true)
                 .zIndex(10f)
@@ -253,6 +273,15 @@ class GoogleMapsPlaybackView(
                 seekTo(index)
                 result.success(null)
             }
+            "getPlaybackDuration" -> {
+                var stopsCount = 0
+                if (showStops) {
+                    stopsCount = points.count { it.isStop }
+                }
+                val travelTime = totalDistance / (baseSpeed * playbackSpeed)
+                val stopTime = stopsCount * (Math.max(100L, (2000L / playbackSpeed).toLong()) / 1000.0)
+                result.success(travelTime + stopTime)
+            }
             "zoomIn" -> {
                 isAnimatingCamera = true
                 googleMap?.animateCamera(CameraUpdateFactory.zoomIn(), object : GoogleMap.CancelableCallback {
@@ -295,6 +324,141 @@ class GoogleMapsPlaybackView(
             "setMapStyle" -> {
                 val style = call.argument<String>("style")
                 googleMap?.setMapStyle(if (style != null) MapStyleOptions(style) else null)
+                result.success(null)
+            }
+            "updateOptions" -> {
+                val options = call.arguments as? Map<String, Any> ?: return
+                if (options.containsKey("baseSpeed")) {
+                    baseSpeed = (options["baseSpeed"] as Double)
+                    if (isPlaying) { animator?.cancel(); startAnimation() }
+                }
+                if (options.containsKey("showUserLocation")) {
+                    try { googleMap?.isMyLocationEnabled = options["showUserLocation"] as Boolean } catch (e: Exception) {}
+                }
+                if (options.containsKey("mapType")) googleMap?.mapType = options["mapType"] as Int
+                if (options.containsKey("showTraffic")) googleMap?.isTrafficEnabled = options["showTraffic"] as Boolean
+                if (options.containsKey("zoomGesturesEnabled")) googleMap?.uiSettings?.isZoomGesturesEnabled = options["zoomGesturesEnabled"] as Boolean
+                if (options.containsKey("scrollGesturesEnabled")) googleMap?.uiSettings?.isScrollGesturesEnabled = options["scrollGesturesEnabled"] as Boolean
+                if (options.containsKey("tiltGesturesEnabled")) googleMap?.uiSettings?.isTiltGesturesEnabled = options["tiltGesturesEnabled"] as Boolean
+                if (options.containsKey("rotateGesturesEnabled")) googleMap?.uiSettings?.isRotateGesturesEnabled = options["rotateGesturesEnabled"] as Boolean
+                if (options.containsKey("isDark")) {
+                    val isDark = options["isDark"] as Boolean
+                    if (isDark) {
+                        val style = options["style"] as? String
+                        if (style != null) googleMap?.setMapStyle(MapStyleOptions(style))
+                        else googleMap?.setMapStyle(MapStyleOptions("[{\"elementType\": \"geometry\",\"stylers\": [{\"color\": \"#242f3e\"}]}]"))
+                    } else {
+                        googleMap?.setMapStyle(null)
+                    }
+                }
+                if (options.containsKey("canRotate")) canRotate = options["canRotate"] as Boolean
+                if (options.containsKey("dynamicRotation")) dynamicRotation = options["dynamicRotation"] as Boolean
+                if (options.containsKey("showStops")) {
+                    showStops = options["showStops"] as Boolean
+                    if (showStops) renderStops() else clearStops()
+                }
+                result.success(null)
+            }
+            "addMarkers" -> {
+                val markers = call.argument<List<Map<String, Any>>>("markers") ?: emptyList()
+                markers.forEach { m ->
+                    val id = m["id"] as String
+                    val lat = m["lat"] as Double
+                    val lng = m["lng"] as Double
+                    val anchorX = (m["anchorX"] as Double).toFloat()
+                    val anchorY = (m["anchorY"] as Double).toFloat()
+                    val rotation = (m["rotation"] as Double).toFloat()
+                    val zIndex = (m["zIndex"] as Double).toFloat()
+                    val flat = m["flat"] as Boolean
+
+                    val options = MarkerOptions()
+                        .position(LatLng(lat, lng))
+                        .anchor(anchorX, anchorY)
+                        .rotation(rotation)
+                        .zIndex(zIndex)
+                        .flat(flat)
+
+                    val iconBytes = m["iconBytes"] as? ByteArray
+                    if (iconBytes != null) {
+                        try {
+                            val bitmap = BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size)
+                            options.icon(BitmapDescriptorFactory.fromBitmap(bitmap))
+                        } catch (e: Exception) {}
+                    }
+
+                    val marker = googleMap?.addMarker(options)
+                    if (marker != null) {
+                        customMarkers[id]?.remove()
+                        customMarkers[id] = marker
+                    }
+                }
+                result.success(null)
+            }
+            "clearMarkers" -> {
+                customMarkers.values.forEach { it.remove() }
+                customMarkers.clear()
+                result.success(null)
+            }
+            "addCircles" -> {
+                val circles = call.argument<List<Map<String, Any>>>("circles") ?: emptyList()
+                circles.forEach { c ->
+                    val id = c["id"] as String
+                    val lat = c["lat"] as Double
+                    val lng = c["lng"] as Double
+                    val radius = c["radius"] as Double
+                    val fillColor = Color.parseColor(c["fillColor"] as String)
+                    val strokeColor = Color.parseColor(c["strokeColor"] as String)
+                    val strokeWidth = (c["strokeWidth"] as Double).toFloat()
+                    val zIndex = (c["zIndex"] as Double).toFloat()
+
+                    val options = CircleOptions()
+                        .center(LatLng(lat, lng))
+                        .radius(radius)
+                        .fillColor(fillColor)
+                        .strokeColor(strokeColor)
+                        .strokeWidth(strokeWidth)
+                        .zIndex(zIndex)
+
+                    val circle = googleMap?.addCircle(options)
+                    if (circle != null) {
+                        customCircles[id]?.remove()
+                        customCircles[id] = circle
+                    }
+                }
+                result.success(null)
+            }
+            "clearCircles" -> {
+                customCircles.values.forEach { it.remove() }
+                customCircles.clear()
+                result.success(null)
+            }
+            "addPolylines" -> {
+                val polylines = call.argument<List<Map<String, Any>>>("polylines") ?: emptyList()
+                polylines.forEach { p ->
+                    val id = p["id"] as String
+                    val pointsRaw = p["points"] as List<Map<String, Double>>
+                    val pts = pointsRaw.map { LatLng(it["lat"]!!, it["lng"]!!) }
+                    val color = Color.parseColor(p["color"] as String)
+                    val width = (p["width"] as Double).toFloat()
+                    val zIndex = (p["zIndex"] as Double).toFloat()
+
+                    val options = PolylineOptions()
+                        .addAll(pts)
+                        .color(color)
+                        .width(width)
+                        .zIndex(zIndex)
+
+                    val polyline = googleMap?.addPolyline(options)
+                    if (polyline != null) {
+                        customPolylines[id]?.remove()
+                        customPolylines[id] = polyline
+                    }
+                }
+                result.success(null)
+            }
+            "clearPolylines" -> {
+                customPolylines.values.forEach { it.remove() }
+                customPolylines.clear()
                 result.success(null)
             }
             else -> result.notImplemented()
@@ -373,10 +537,15 @@ class GoogleMapsPlaybackView(
         val lng = start.lng + (end.lng - start.lng) * t.toDouble()
         val pos = LatLng(lat, lng)
 
-        var delta = (end.bearing - start.bearing).toFloat()
-        if (delta > 180) delta -= 360
-        if (delta < -180) delta += 360
-        val rotation = start.bearing.toFloat() + delta * t
+        var rotation: Float
+        if (dynamicRotation) {
+            rotation = computeHeading(start.lat, start.lng, end.lat, end.lng).toFloat()
+        } else {
+            var delta = (end.bearing - start.bearing).toFloat()
+            if (delta > 180) delta -= 360
+            if (delta < -180) delta += 360
+            rotation = start.bearing.toFloat() + delta * t
+        }
 
         trailPoints.add(pos)
         progressPolyline?.points = trailPoints
@@ -440,8 +609,14 @@ class GoogleMapsPlaybackView(
         updateProgressTrail(pos, safeIndex)
         if (showStops) renderStops()
         
+        var initialRotation = if (canRotate) p.bearing.toFloat() else 0f
+        if (canRotate && dynamicRotation && safeIndex < points.size - 1) {
+            val nextP = points[safeIndex + 1]
+            initialRotation = computeHeading(p.lat, p.lng, nextP.lat, nextP.lng).toFloat()
+        }
+
         vehicleMarker?.position = pos
-        vehicleMarker?.rotation = if (canRotate) p.bearing.toFloat() else 0f
+        vehicleMarker?.rotation = initialRotation
         
         followVehicle = true
         googleMap?.moveCamera(CameraUpdateFactory.newLatLng(pos))
@@ -494,6 +669,18 @@ class GoogleMapsPlaybackView(
     private fun clearStops() {
         stopMarkers.values.forEach { it.remove() }
         stopMarkers.clear()
+    }
+
+    private fun computeHeading(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
+        val fromLat = Math.toRadians(lat1)
+        val fromLng = Math.toRadians(lng1)
+        val toLat = Math.toRadians(lat2)
+        val toLng = Math.toRadians(lng2)
+        val dLng = toLng - fromLng
+        val y = kotlin.math.sin(dLng) * kotlin.math.cos(toLat)
+        val x = kotlin.math.cos(fromLat) * kotlin.math.sin(toLat) - kotlin.math.sin(fromLat) * kotlin.math.cos(toLat) * kotlin.math.cos(dLng)
+        val heading = kotlin.math.atan2(y, x)
+        return (Math.toDegrees(heading) + 360) % 360
     }
 }
 

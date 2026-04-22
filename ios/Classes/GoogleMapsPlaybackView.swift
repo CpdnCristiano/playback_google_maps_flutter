@@ -22,11 +22,16 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
     private var playbackSpeed: Int = 1
     private var followTimer: Timer?
     private var canRotate: Bool = true
+    private var dynamicRotation: Bool = false
     private var baseSpeed: Double = 60.0
     
     private var vehicleMarker: GMSMarker?
     private var progressPolyline: GMSPolyline?
     private var stopMarkers: [Int: GMSMarker] = [:]
+    
+    private var customMarkers: [String: GMSMarker] = [:]
+    private var customCircles: [String: GMSCircle] = [:]
+    private var customPolylines: [String: GMSPolyline] = [:]
     
     private var currentGlobalDistance: Double = 0.0
     private var lastStopIndexPassed: Int = -1
@@ -40,6 +45,7 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
     private var vehicleIconNormal: UIImage?
     private var vehicleIconFlipped: UIImage?
     private var polylineColor: UIColor = .blue
+    private var showUserLocation: Bool = false
     
     init(
         frame: CGRect,
@@ -125,7 +131,9 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         self.isDarkMode = params["isDark"] as? Bool ?? false
         self.initialStyle = params["style"] as? String
         self.canRotate = params["canRotate"] as? Bool ?? true
+        self.dynamicRotation = params["dynamicRotation"] as? Bool ?? false
         self.baseSpeed = params["baseSpeed"] as? Double ?? 60.0
+        self.showUserLocation = params["showUserLocation"] as? Bool ?? false
         
         if let colorHex = params["polylineColor"] as? String {
             self.polylineColor = hexToColor(colorHex)
@@ -169,10 +177,12 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         mapView.mapType = initialMapType
         mapView.isTrafficEnabled = isTrafficEnabled
         
-        mapView.settings.zoomGestures = true
-        mapView.settings.scrollGestures = true
-        mapView.settings.tiltGestures = true
-        mapView.settings.rotateGestures = true
+        mapView.settings.zoomGestures = params["zoomGesturesEnabled"] as? Bool ?? true
+        mapView.settings.scrollGestures = params["scrollGesturesEnabled"] as? Bool ?? true
+        mapView.settings.tiltGestures = params["tiltGesturesEnabled"] as? Bool ?? true
+        mapView.settings.rotateGestures = params["rotateGesturesEnabled"] as? Bool ?? true
+        
+        mapView.isMyLocationEnabled = showUserLocation
         
         mapView.animate(toBearing: 0)
         mapView.animate(toViewingAngle: 0)
@@ -192,7 +202,12 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         let marker = GMSMarker(position: firstPos)
         marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
         marker.isFlat = true
-        marker.rotation = canRotate ? first.bearing : 0
+        
+        var initialRotation = canRotate ? first.bearing : 0
+        if canRotate && dynamicRotation && points.count > 1 {
+            initialRotation = computeHeading(lat1: points[0].lat, lng1: points[0].lng, lat2: points[1].lat, lng2: points[1].lng)
+        }
+        marker.rotation = initialRotation
         
         marker.zIndex = 10 
         
@@ -244,6 +259,14 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
                 seek(to: index)
             }
             result(nil)
+        case "getPlaybackDuration":
+            var stopsCount = 0
+            if showStops {
+                stopsCount = points.filter { $0.isStop }.count
+            }
+            let travelTime = totalDistance / (baseSpeed * Double(playbackSpeed))
+            let stopTime = Double(stopsCount) * max(0.1, 2.0 / Double(playbackSpeed))
+            result(travelTime + stopTime)
         case "zoomIn":
             isAnimatingCamera = true
             CATransaction.begin()
@@ -300,6 +323,181 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
             } else {
                 mapView.mapStyle = nil
             }
+            result(nil)
+        case "updateOptions":
+            if let options = call.arguments as? [String: Any] {
+                if let baseSpeed = options["baseSpeed"] as? Double {
+                    self.baseSpeed = baseSpeed
+                    if isPlaying { pauseAnimation(); startAnimation() }
+                }
+                if let showUserLocation = options["showUserLocation"] as? Bool {
+                    self.showUserLocation = showUserLocation
+                    mapView.isMyLocationEnabled = showUserLocation
+                }
+                if let mapTypeInt = options["mapType"] as? Int {
+                    switch mapTypeInt {
+                    case 0: mapView.mapType = .none
+                    case 1: mapView.mapType = .normal
+                    case 2: mapView.mapType = .satellite
+                    case 3: mapView.mapType = .terrain
+                    case 4: mapView.mapType = .hybrid
+                    default: mapView.mapType = .normal
+                    }
+                }
+                if let showTraffic = options["showTraffic"] as? Bool {
+                    mapView.isTrafficEnabled = showTraffic
+                }
+                if let zoomGesturesEnabled = options["zoomGesturesEnabled"] as? Bool {
+                    mapView.settings.zoomGestures = zoomGesturesEnabled
+                }
+                if let scrollGesturesEnabled = options["scrollGesturesEnabled"] as? Bool {
+                    mapView.settings.scrollGestures = scrollGesturesEnabled
+                }
+                if let tiltGesturesEnabled = options["tiltGesturesEnabled"] as? Bool {
+                    mapView.settings.tiltGestures = tiltGesturesEnabled
+                }
+                if let rotateGesturesEnabled = options["rotateGesturesEnabled"] as? Bool {
+                    mapView.settings.rotateGestures = rotateGesturesEnabled
+                }
+                if let isDark = options["isDark"] as? Bool {
+                    if isDark {
+                        if let style = options["style"] as? String {
+                            mapView.mapStyle = try? GMSMapStyle(jsonString: style)
+                        } else {
+                            mapView.mapStyle = try? GMSMapStyle(jsonString: "[{\"elementType\": \"geometry\",\"stylers\": [{\"color\": \"#242f3e\"}]}]")
+                        }
+                    } else {
+                        mapView.mapStyle = nil
+                    }
+                }
+                if let canRotate = options["canRotate"] as? Bool {
+                    self.canRotate = canRotate
+                }
+                if let dynamicRotation = options["dynamicRotation"] as? Bool {
+                    self.dynamicRotation = dynamicRotation
+                }
+                if let showStops = options["showStops"] as? Bool {
+                    self.showStops = showStops
+                    if showStops { renderStops() } else { clearStops() }
+                }
+            }
+            result(nil)
+        case "addMarkers":
+            if let args = call.arguments as? [String: Any], let markersRaw = args["markers"] as? [[String: Any]] {
+                for m in markersRaw {
+                    guard let id = m["id"] as? String,
+                          let lat = m["lat"] as? Double,
+                          let lng = m["lng"] as? Double else { continue }
+                    
+                    let position = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+                    let marker = GMSMarker(position: position)
+                    
+                    if let anchorX = m["anchorX"] as? Double, let anchorY = m["anchorY"] as? Double {
+                        marker.groundAnchor = CGPoint(x: anchorX, y: anchorY)
+                    }
+                    if let rotation = m["rotation"] as? Double {
+                        marker.rotation = rotation
+                    }
+                    if let zIndex = m["zIndex"] as? Int32 {
+                        marker.zIndex = zIndex
+                    } else if let zIndexDouble = m["zIndex"] as? Double {
+                        marker.zIndex = Int32(zIndexDouble)
+                    }
+                    if let flat = m["flat"] as? Bool {
+                        marker.isFlat = flat
+                    }
+                    if let iconBytes = m["iconBytes"] as? FlutterStandardTypedData {
+                        marker.icon = UIImage(data: iconBytes.data, scale: UIScreen.main.scale)
+                    }
+                    
+                    marker.map = mapView
+                    customMarkers[id]?.map = nil
+                    customMarkers[id] = marker
+                }
+            }
+            result(nil)
+        case "clearMarkers":
+            for marker in customMarkers.values {
+                marker.map = nil
+            }
+            customMarkers.removeAll()
+            result(nil)
+        case "addCircles":
+            if let args = call.arguments as? [String: Any], let circlesRaw = args["circles"] as? [[String: Any]] {
+                for c in circlesRaw {
+                    guard let id = c["id"] as? String,
+                          let lat = c["lat"] as? Double,
+                          let lng = c["lng"] as? Double,
+                          let radius = c["radius"] as? Double else { continue }
+                    
+                    let position = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+                    let circle = GMSCircle(position: position, radius: radius)
+                    
+                    if let fillColorHex = c["fillColor"] as? String {
+                        circle.fillColor = hexToColor(fillColorHex)
+                    }
+                    if let strokeColorHex = c["strokeColor"] as? String {
+                        circle.strokeColor = hexToColor(strokeColorHex)
+                    }
+                    if let strokeWidth = c["strokeWidth"] as? Double {
+                        circle.strokeWidth = CGFloat(strokeWidth)
+                    }
+                    if let zIndex = c["zIndex"] as? Int32 {
+                        circle.zIndex = zIndex
+                    } else if let zIndexDouble = c["zIndex"] as? Double {
+                        circle.zIndex = Int32(zIndexDouble)
+                    }
+                    
+                    circle.map = mapView
+                    customCircles[id]?.map = nil
+                    customCircles[id] = circle
+                }
+            }
+            result(nil)
+        case "clearCircles":
+            for circle in customCircles.values {
+                circle.map = nil
+            }
+            customCircles.removeAll()
+            result(nil)
+        case "addPolylines":
+            if let args = call.arguments as? [String: Any], let polylinesRaw = args["polylines"] as? [[String: Any]] {
+                for p in polylinesRaw {
+                    guard let id = p["id"] as? String,
+                          let pointsRaw = p["points"] as? [[String: Double]] else { continue }
+                    
+                    let path = GMSMutablePath()
+                    for pt in pointsRaw {
+                        if let lat = pt["lat"], let lng = pt["lng"] {
+                            path.add(CLLocationCoordinate2D(latitude: lat, longitude: lng))
+                        }
+                    }
+                    
+                    let polyline = GMSPolyline(path: path)
+                    
+                    if let colorHex = p["color"] as? String {
+                        polyline.strokeColor = hexToColor(colorHex)
+                    }
+                    if let width = p["width"] as? Double {
+                        polyline.strokeWidth = CGFloat(width)
+                    }
+                    if let zIndex = p["zIndex"] as? Int32 {
+                        polyline.zIndex = zIndex
+                    } else if let zIndexDouble = p["zIndex"] as? Double {
+                        polyline.zIndex = Int32(zIndexDouble)
+                    }
+                    
+                    polyline.map = mapView
+                    customPolylines[id]?.map = nil
+                    customPolylines[id] = polyline
+                }
+            }
+            result(nil)
+        case "clearPolylines":
+            for polyline in customPolylines.values {
+                polyline.map = nil
+            }
+            customPolylines.removeAll()
             result(nil)
         default:
             result(FlutterMethodNotImplemented)
@@ -376,10 +574,15 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         let lng = start.lng + (end.lng - start.lng) * Double(t)
         let pos = CLLocationCoordinate2D(latitude: lat, longitude: lng)
         
-        var delta = Float(end.bearing - start.bearing)
-        if delta > 180 { delta -= 360 }
-        if delta < -180 { delta += 360 }
-        let rotation = Float(start.bearing) + delta * t
+        let rotation: Float
+        if dynamicRotation {
+            rotation = Float(computeHeading(lat1: start.lat, lng1: start.lng, lat2: end.lat, lng2: end.lng))
+        } else {
+            var delta = Float(end.bearing - start.bearing)
+            if delta > 180 { delta -= 360 }
+            if delta < -180 { delta += 360 }
+            rotation = Float(start.bearing) + delta * t
+        }
         
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -446,8 +649,14 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
         updateProgressTrail(upTo: pos, at: safeIndex)
         if showStops { renderStops() }
         
+        var initialRotation = canRotate ? p.bearing : 0
+        if canRotate && dynamicRotation && safeIndex < points.count - 1 {
+            let nextP = points[safeIndex + 1]
+            initialRotation = computeHeading(lat1: p.lat, lng1: p.lng, lat2: nextP.lat, lng2: nextP.lng)
+        }
+        
         vehicleMarker?.position = pos
-        vehicleMarker?.rotation = canRotate ? p.bearing : 0
+        vehicleMarker?.rotation = initialRotation
         
         followVehicle = true
         mapView.moveCamera(GMSCameraUpdate.setTarget(pos))
@@ -519,6 +728,20 @@ public class GoogleMapsPlaybackView: NSObject, FlutterPlatformView, GMSMapViewDe
             blue: CGFloat(rgbValue & 0x0000FF) / 255.0,
             alpha: CGFloat(1.0)
         )
+    }
+
+    private func computeHeading(lat1: Double, lng1: Double, lat2: Double, lng2: Double) -> Double {
+        let fromLat = lat1 * .pi / 180.0
+        let fromLng = lng1 * .pi / 180.0
+        let toLat = lat2 * .pi / 180.0
+        let toLng = lng2 * .pi / 180.0
+        
+        let dLng = toLng - fromLng
+        let y = sin(dLng) * cos(toLat)
+        let x = cos(fromLat) * sin(toLat) - sin(fromLat) * cos(toLat) * cos(dLng)
+        let heading = atan2(y, x)
+        
+        return (heading * 180.0 / .pi + 360.0).truncatingRemainder(dividingBy: 360.0)
     }
 }
 
