@@ -120,7 +120,7 @@ class PlaybackManager(
     fun setSpeed(speed: Int) {
         playbackSpeed = speed
         if (isPlaying) {
-            playbackAnimator?.cancel()
+            pause()
             play()
         }
     }
@@ -131,22 +131,18 @@ class PlaybackManager(
         val segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
         val t = if (segmentDist > 0) ((distance - cumulativeDistances[idx]) / segmentDist).toFloat().coerceIn(0f, 1f) else 0f
         
-        val pos = LatLng(
-            points[idx].lat + (points[idx + 1].lat - points[idx].lat) * t,
-            points[idx].lng + (points[idx + 1].lng - points[idx].lng) * t
-        )
+        // Catmull-Rom Interpolation
+        val p1 = points[idx]
+        val p2 = points[idx + 1]
+        val p0 = if (idx > 0) points[idx - 1] else p1
+        val p3 = if (idx + 2 < points.size) points[idx + 2] else p2
+        
+        val pos = interpolateCatmullRom(p0, p1, p2, p3, t)
         
         vehicleMarker?.position = pos
         if (playbackSettings.canRotate) {
             val rotation = if (playbackSettings.dynamicRotation) {
-                // compute bearing between points[idx] and points[idx+1]
-                val results = FloatArray(2)
-                android.location.Location.distanceBetween(
-                    points[idx].lat, points[idx].lng,
-                    points[idx + 1].lat, points[idx + 1].lng,
-                    results
-                )
-                results[1] // initial bearing
+                getCatmullRomHeading(p0, p1, p2, p3, t)
             } else {
                 points[idx].bearing.toFloat()
             }
@@ -205,5 +201,25 @@ class PlaybackManager(
     fun dispose() {
         playbackAnimator?.cancel()
         reset()
+    }
+
+    private fun interpolateCatmullRom(p0: GoogleMapsPlaybackPoint, p1: GoogleMapsPlaybackPoint, p2: GoogleMapsPlaybackPoint, p3: GoogleMapsPlaybackPoint, t: Float): LatLng {
+        val t2 = t * t
+        val t3 = t2 * t
+        
+        val lat = 0.5 * ((2 * p1.lat) + (-p0.lat + p2.lat) * t + (2 * p0.lat - 5 * p1.lat + 4 * p2.lat - p3.lat) * t2 + (-p0.lat + 3 * p1.lat - 3 * p2.lat + p3.lat) * t3)
+        val lng = 0.5 * ((2 * p1.lng) + (-p0.lng + p2.lng) * t + (2 * p0.lng - 5 * p1.lng + 4 * p2.lng - p3.lng) * t2 + (-p0.lng + 3 * p1.lng - 3 * p2.lng + p3.lng) * t3)
+        
+        return LatLng(lat, lng)
+    }
+
+    private fun getCatmullRomHeading(p0: GoogleMapsPlaybackPoint, p1: GoogleMapsPlaybackPoint, p2: GoogleMapsPlaybackPoint, p3: GoogleMapsPlaybackPoint, t: Float): Float {
+        val t2 = t * t
+        
+        // Derivative of Catmull-Rom
+        val dLat = 0.5 * ((-p0.lat + p2.lat) + 2 * (2 * p0.lat - 5 * p1.lat + 4 * p2.lat - p3.lat) * t + 3 * (-p0.lat + 3 * p1.lat - 3 * p2.lat + p3.lat) * t2)
+        val dLng = 0.5 * ((-p0.lng + p2.lng) + 2 * (2 * p0.lng - 5 * p1.lng + 4 * p2.lng - p3.lng) * t + 3 * (-p0.lng + 3 * p1.lng - 3 * p2.lng + p3.lng) * t2)
+        
+        return (Math.toDegrees(Math.atan2(dLng, dLat)).toFloat() + 360f) % 360f
     }
 }
