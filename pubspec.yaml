@@ -1,5 +1,5 @@
-name: google_maps_playback
-description: "A high-performance Google Maps playback plugin for Flutter using native SDKs."
+name: google_maps_plus
+description: "A high-performance Google Maps plugin for Flutter using native SDKs with advanced playback and imperative control."
 version: 0.0.1
 homepage:
 
@@ -10,7 +10,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  google_maps_flutter_platform_interface: ^2.15.0
   plugin_platform_interface: ^2.0.2
+  collection: ^1.18.0
 
 dev_dependencies:
   flutter_test:
@@ -40,10 +42,10 @@ flutter:
     # https://flutter.dev/to/pubspec-plugin-platforms
     # -------------------
       android:
-        package: br.com.cpndntech.google_maps_playback
-        pluginClass: GoogleMapsPlaybackPlugin
+        package: br.com.cpndntech.google_maps_plus
+        pluginClass: GoogleMapsPlusPlugin
       ios:
-        pluginClass: GoogleMapsPlaybackPlugin
+        pluginClass: GoogleMapsPlusPlugin
     # -------------------
 
   # To add assets to your plugin package, add an assets section, like this:

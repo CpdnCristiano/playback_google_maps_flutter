@@ -1,11 +1,11 @@
 import Flutter
 import UIKit
 
-public class GoogleMapsPlaybackFactory: NSObject, FlutterPlatformViewFactory {
-    private var messenger: FlutterBinaryMessenger
+public class GoogleMapsPlusPlaybackFactory: NSObject, FlutterPlatformViewFactory {
+    private var registrar: FlutterPluginRegistrar
 
-    init(messenger: FlutterBinaryMessenger) {
-        self.messenger = messenger
+    init(registrar: FlutterPluginRegistrar) {
+        self.registrar = registrar
         super.init()
     }
 
@@ -14,15 +14,16 @@ public class GoogleMapsPlaybackFactory: NSObject, FlutterPlatformViewFactory {
         viewIdentifier viewId: Int64,
         arguments args: Any?
     ) -> FlutterPlatformView {
-        return GoogleMapsPlaybackView(
+        return GoogleMapsPlusView(
             frame: frame,
             viewIdentifier: viewId,
             arguments: args,
-            binaryMessenger: messenger
+            registrar: registrar,
+            isPlaybackMode: true
         )
     }
 
     public func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
-          return FlutterStandardMessageCodec.sharedInstance()
+        return FlutterStandardMessageCodec.sharedInstance()
     }
 }

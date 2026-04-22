@@ -1,15 +1,14 @@
-# Google Maps Playback
+# Google Maps Plus
 
-A high-performance Flutter plugin for replaying vehicle routes on Google Maps with smooth animations and trail rendering.
+A high-performance Flutter plugin for Google Maps with imperative control and advanced playback capabilities.
 
 ## Features
 
+- **GoogleMapsPlus**: High-performance imperative map widget for real-time tracking and marker management.
+- **GoogleMapsPlusPlayback**: Optimized route replay with smooth vehicle movement and trail rendering.
 - **Smooth Vehicle Movement**: Optimized native animations for vehicle icons across Android and iOS.
-- **Dynamic Trail Rendering**: Automatically draws the vehicle's path as it moves.
-- **Stop Indicators**: Display stop markers along the route with configurable icons.
-- **Playback Controls**: Play, pause, seek, and adjust playback speed (1x, 2x, 4x, etc.).
-- **Interaction Friendly**: Intelligent "Follow Vehicle" logic that suspends when the user interacts with the map (gestures/zoom) and resumes automatically.
-- **Highly Customizable**: Custom icons for vehicles (normal and flipped), stop signs, polyline colors, and map styles.
+- **Interaction Friendly**: Intelligent "Follow Vehicle" logic that suspends when the user interacts with the map and resumes automatically.
+- **Highly Customizable**: Custom icons, markers, polygons, circles, and map styles.
 
 ## Installation
 
@@ -17,7 +16,7 @@ Add the following to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  google_maps_playback:
+  google_maps_plus:
     git:
       url: https://github.com/CpdnCristiano/playback_google_maps_flutter.git
       ref: main
@@ -25,39 +24,28 @@ dependencies:
 
 ## Basic Usage
 
-### Initialize the Controller
+### GoogleMapsPlus (Imperative Control)
 
 ```dart
-final controller = GoogleMapsPlaybackController();
-
-// To play
-controller.play();
-
-// To pause
-controller.pause();
-
-// To seek to a specific point
-controller.seek(10); // Index of the point
-
-// To change speed
-controller.setSpeed(2); // 2x speed
+GoogleMapsPlus(
+  initialCameraPosition: CameraPosition(target: LatLng(0,0), zoom: 10),
+  onMapCreated: (controller) {
+    // Imperative control
+    controller.animateCamera(CameraUpdate.newLatLng(LatLng(-23.5, -46.6)));
+    controller.moveMarker('vehicle_1', LatLng(-23.5, -46.6), rotation: 90);
+  },
+)
 ```
 
-### Add the Widget to your UI
+### GoogleMapsPlusPlayback (Route Replay)
 
 ```dart
-GoogleMapsPlayback(
-  points: myPlaybackPoints, // List<GoogleMapsPlaybackPoint>
-  controller: controller,
+GoogleMapsPlusPlayback(
+  points: myPlaybackPoints,
   vehicleIcon: vehicleIconBytes,
-  stopIcon: stopIconBytes,
   polylineColor: Colors.blue,
-  showStops: true,
-  onProgress: (progress) {
-    print("Playback progress: $progress");
-  },
-  onStopClick: (index) {
-    print("Stop clicked at index: $index");
+  onMapCreated: (controller) {
+    controller.play();
   },
 )
 ```

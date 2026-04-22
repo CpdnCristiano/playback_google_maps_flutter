@@ -1,4 +1,4 @@
-group = "br.com.cpndntech.google_maps_playback"
+group = "br.com.cpndntech.google_maps_plus"
 version = "1.0-SNAPSHOT"
 
 buildscript {
@@ -27,7 +27,7 @@ plugins {
 }
 
 android {
-    namespace = "br.com.cpndntech.google_maps_playback"
+    namespace = "br.com.cpndntech.google_maps_plus"
 
     compileSdk = 36
 
