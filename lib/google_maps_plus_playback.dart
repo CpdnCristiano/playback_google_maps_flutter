@@ -303,19 +303,10 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
         _channel!.invokeMethod('marker_remove', {'id': id});
       }
     }
-    debugPrint(
-      'Polylines changed: ${widget.polylines} vs ${oldWidget.polylines}',
-    );
-    debugPrint(
-      'Polylines changed: ${widget.polylines.length} vs ${oldWidget.polylines.length}',
-    );
     if (!setEquals(widget.polylines, oldWidget.polylines)) {
       debugPrint('Polylines have changed');
       final oldPolylines = {for (var p in oldWidget.polylines) p.polylineId: p};
       final newPolylines = {for (var p in widget.polylines) p.polylineId: p};
-
-      debugPrint('Old Polyline IDs: ${oldPolylines.keys.map((k) => k.value).toList()}');
-      debugPrint('New Polyline IDs: ${newPolylines.keys.map((k) => k.value).toList()}');
 
       final polylinesToAdd = widget.polylines
           .where((p) => !oldPolylines.containsKey(p.polylineId))
@@ -335,10 +326,8 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
       if (polylinesToAdd.isNotEmpty ||
           polylinesToChange.isNotEmpty ||
           polylineIdsToRemove.isNotEmpty) {
-        final addJson = polylinesToAdd.map((p) => p.toJson()).toList();
-        debugPrint('Sending polylines to add: $addJson');
         _channel!.invokeMethod('polylines/update', {
-          'toAdd': addJson,
+          'toAdd': polylinesToAdd.map((p) => p.toJson()).toList(),
           'toChange': polylinesToChange.map((p) => p.toJson()).toList(),
           'toRemove': polylineIdsToRemove,
         });
