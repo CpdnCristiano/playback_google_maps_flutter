@@ -144,6 +144,7 @@ class PlaybackManager: NSObject {
 
     func seekTo(_ index: Int) {
         pause()
+        guard !points.isEmpty else { return }
         let idx = index.clamped(to: 0...(points.count - 1))
         currentGlobalDistance = cumulativeDistances[idx]
         updateVehiclePosition(currentGlobalDistance)
