@@ -1,6 +1,8 @@
 package br.com.cpndntech.google_maps_plus
 
 import android.animation.ValueAnimator
+import android.os.Handler
+import android.os.Looper
 import android.view.animation.LinearInterpolator
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
@@ -27,6 +29,10 @@ class PlaybackManager(
     private var playbackAnimator: ValueAnimator? = null
     var isPlaying = false
         private set
+    private var isPausedForStop = false
+    private var lastStopIndexPassed = -1
+    private val trailPoints = mutableListOf<LatLng>()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     var followEnabled = true
 
@@ -93,6 +99,11 @@ class PlaybackManager(
                 val segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
                 val localT = if (segmentDist > 0) (currentGlobalDistance - cumulativeDistances[idx]) / segmentDist else 0.0
                 channel.invokeMethod("onProgress", mapOf("index" to idx.toDouble() + localT))
+
+                if (playbackSettings.showStops && points[idx].isStop && idx != lastStopIndexPassed) {
+                    lastStopIndexPassed = idx
+                    pauseForStop(idx)
+                }
                 
                 if (currentGlobalDistance >= totalDistance) {
                     isPlaying = false
@@ -106,8 +117,34 @@ class PlaybackManager(
 
     fun pause() {
         isPlaying = false
+        isPausedForStop = false
+        mainHandler.removeCallbacksAndMessages(null)
         playbackAnimator?.cancel()
         channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "paused"))
+    }
+
+    private fun pauseForStop(index: Int) {
+        isPausedForStop = true
+        playbackAnimator?.pause()
+        channel.invokeMethod("onStopReached", mapOf("index" to index))
+        channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "stopped"))
+
+        val delayMs = (2000L / playbackSpeed)
+        mainHandler.postDelayed({
+            if (isPausedForStop) {
+                isPausedForStop = false
+                playbackAnimator?.resume()
+                channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "playing"))
+            }
+        }, delayMs)
+    }
+
+    fun resumeFromStop() {
+        if (!isPausedForStop) return
+        isPausedForStop = false
+        mainHandler.removeCallbacksAndMessages(null)
+        playbackAnimator?.resume()
+        channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "playing"))
     }
 
     fun seekTo(index: Int) {
@@ -154,9 +191,9 @@ class PlaybackManager(
         }
 
         if (playbackSettings.drawTrail) {
-            val trailPoints = points.subList(0, idx + 1).map { LatLng(it.lat, it.lng) }.toMutableList()
+            // Acumula posição real (suavizada Catmull-Rom) — trilha não aparece à frente do carro
             trailPoints.add(pos)
-            progressPolyline?.points = trailPoints
+            progressPolyline?.points = trailPoints.toList()
         }
     }
 
@@ -188,8 +225,12 @@ class PlaybackManager(
 
     private fun reset() {
         playbackAnimator?.cancel()
+        mainHandler.removeCallbacksAndMessages(null)
         currentGlobalDistance = 0.0
         isPlaying = false
+        isPausedForStop = false
+        lastStopIndexPassed = -1
+        trailPoints.clear()
         vehicleMarker?.remove()
         vehicleMarker = null
         progressPolyline?.remove()

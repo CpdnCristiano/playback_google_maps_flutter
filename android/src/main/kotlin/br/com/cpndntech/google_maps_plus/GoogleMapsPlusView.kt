@@ -155,6 +155,7 @@ class GoogleMapsPlusView(
             // Playback specific
             "play" -> { pManager?.play(); result.success(null) }
             "pause" -> { pManager?.pause(); result.success(null) }
+            "resumeFromStop" -> { pManager?.resumeFromStop(); result.success(null) }
             "seek" -> { pManager?.seekTo(call.argument<Int>("index") ?: 0); result.success(null) }
             "setSpeed" -> { pManager?.setSpeed(call.argument<Int>("speed") ?: 1); result.success(null) }
             
