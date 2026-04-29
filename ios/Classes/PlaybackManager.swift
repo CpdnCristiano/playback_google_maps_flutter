@@ -33,6 +33,7 @@ class PlaybackManager: NSObject {
     var isPlaying: Bool = false
     private var isPausedForStop: Bool = false
     private var lastStopIndexPassed: Int = -1
+    private var lastTrailIdx: Int = -1
     private var trailPath = GMSMutablePath()
     
     private var displayLink: CADisplayLink?
@@ -186,6 +187,7 @@ class PlaybackManager: NSObject {
         for i in 0..<idx {
             trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
         }
+        lastTrailIdx = idx - 1  // updateVehiclePosition ancora em points[idx] ao rodar
         progressPolyline?.path = trailPath
 
         updateVehiclePosition(currentGlobalDistance)  // adiciona a posição interpolada atual
@@ -229,8 +231,14 @@ class PlaybackManager: NSObject {
         }
 
         if playbackSettings.drawTrail {
-            // Acumula posição real (suavizada pelo Catmull-Rom) para a trilha
-            // não aparecer à frente do carro nas curvas
+            // Ancora nos waypoints exatos ao entrar em cada novo segmento,
+            // depois adiciona a posição Catmull-Rom — trilha nunca ultrapassa o carro
+            if idx > lastTrailIdx {
+                for i in Swift.max(0, lastTrailIdx + 1)...idx {
+                    trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
+                }
+                lastTrailIdx = idx
+            }
             trailPath.add(pos)
             progressPolyline?.path = trailPath
         }
@@ -275,6 +283,7 @@ class PlaybackManager: NSObject {
         isPlaying = false
         isPausedForStop = false
         lastStopIndexPassed = -1
+        lastTrailIdx = -1
         trailPath = GMSMutablePath()
         vehicleMarker?.map = nil
         vehicleMarker = nil

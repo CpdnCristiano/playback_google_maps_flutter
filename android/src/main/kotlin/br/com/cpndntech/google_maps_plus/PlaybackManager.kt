@@ -31,6 +31,7 @@ class PlaybackManager(
         private set
     private var isPausedForStop = false
     private var lastStopIndexPassed = -1
+    private var lastTrailIdx = -1
     private val trailPoints = mutableListOf<LatLng>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -159,6 +160,7 @@ class PlaybackManager(
         for (i in 0 until safeIndex) {
             trailPoints.add(LatLng(points[i].lat, points[i].lng))
         }
+        lastTrailIdx = safeIndex - 1  // updateVehiclePosition ancora em points[safeIndex] ao rodar
         progressPolyline?.points = trailPoints.toList()
 
         updateVehiclePosition(currentGlobalDistance)
@@ -202,7 +204,14 @@ class PlaybackManager(
         }
 
         if (playbackSettings.drawTrail) {
-            // Acumula posição real (suavizada Catmull-Rom) — trilha não aparece à frente do carro
+            // Ancora nos waypoints exatos ao entrar em cada novo segmento,
+            // depois adiciona a posição Catmull-Rom — trilha nunca ultrapassa o carro
+            if (idx > lastTrailIdx) {
+                for (i in maxOf(0, lastTrailIdx + 1)..idx) {
+                    trailPoints.add(LatLng(points[i].lat, points[i].lng))
+                }
+                lastTrailIdx = idx
+            }
             trailPoints.add(pos)
             progressPolyline?.points = trailPoints.toList()
         }
@@ -241,6 +250,7 @@ class PlaybackManager(
         isPlaying = false
         isPausedForStop = false
         lastStopIndexPassed = -1
+        lastTrailIdx = -1
         trailPoints.clear()
         vehicleMarker?.remove()
         vehicleMarker = null
