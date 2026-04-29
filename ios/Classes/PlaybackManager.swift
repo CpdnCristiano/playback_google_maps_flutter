@@ -52,6 +52,7 @@ class PlaybackManager: NSObject {
     private func calculateDistances() {
         cumulativeDistances.removeAll()
         totalDistance = 0.0
+        guard !points.isEmpty else { return }
         cumulativeDistances.append(0.0)
         for i in 0..<(points.count - 1) {
             let dist = CLLocation(latitude: points[i].lat, longitude: points[i].lng).distance(from: CLLocation(latitude: points[i+1].lat, longitude: points[i+1].lng))
