@@ -149,9 +149,20 @@ class PlaybackManager(
 
     fun seekTo(index: Int) {
         pause()
-        currentGlobalDistance = cumulativeDistances[index.coerceIn(0, points.size - 1)]
+        if (points.isEmpty()) return
+        val safeIndex = index.coerceIn(0, points.size - 1)
+        currentGlobalDistance = cumulativeDistances[safeIndex]
+        lastStopIndexPassed = safeIndex - 1  // permite que o stop nesse índice dispare a pausa ao retomar
+
+        // Reconstrói a trilha até a posição buscada
+        trailPoints.clear()
+        for (i in 0 until safeIndex) {
+            trailPoints.add(LatLng(points[i].lat, points[i].lng))
+        }
+        progressPolyline?.points = trailPoints.toList()
+
         updateVehiclePosition(currentGlobalDistance)
-        channel.invokeMethod("onProgress", mapOf("index" to index.toDouble()))
+        channel.invokeMethod("onProgress", mapOf("index" to safeIndex.toDouble()))
     }
 
     fun setSpeed(speed: Int) {

@@ -179,8 +179,17 @@ class PlaybackManager: NSObject {
         guard !points.isEmpty else { return }
         let idx = index.clamped(to: 0...(points.count - 1))
         currentGlobalDistance = cumulativeDistances[idx]
-        updateVehiclePosition(currentGlobalDistance)
-        channel.invokeMethod("onProgress", arguments: ["index": Double(index)])
+        lastStopIndexPassed = idx - 1  // permite que o stop nesse índice dispare pausa ao retomar
+
+        // Reconstrói a trilha com os waypoints anteriores ao índice buscado
+        trailPath = GMSMutablePath()
+        for i in 0..<idx {
+            trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
+        }
+        progressPolyline?.path = trailPath
+
+        updateVehiclePosition(currentGlobalDistance)  // adiciona a posição interpolada atual
+        channel.invokeMethod("onProgress", arguments: ["index": Double(idx)])
     }
 
     func setSpeed(_ speed: Int) {
