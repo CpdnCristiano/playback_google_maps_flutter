@@ -223,8 +223,7 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
       stopIcon: stopIcon?.toJson(),
       drawTrail: drawTrail,
       autoStart: autoStart,
-      polylineColor:
-          '#${polylineColor.toARGB32().toRadixString(16).padLeft(8, '0')}',
+      polylineColor: polylineColor.toARGB32(),
       points: points.map((p) => p.toJson()).toList(),
     );
   }

@@ -140,10 +140,12 @@ class Convert {
     }
     
     static func toColor(_ data: Any?) -> UIColor {
-        if let colorInt = data as? Int64 {
-            return UIColor(red: CGFloat((colorInt >> 16) & 0xFF) / 255.0, green: CGFloat((colorInt >> 8) & 0xFF) / 255.0, blue: CGFloat(colorInt & 0xFF) / 255.0, alpha: CGFloat((colorInt >> 24) & 0xFF) / 255.0)
-        }
-        return .blue
+        let colorInt: Int64?
+        if let v = data as? Int64 { colorInt = v }
+        else if let v = data as? Int { colorInt = Int64(v) }
+        else { return .blue }
+        let c = colorInt!
+        return UIColor(red: CGFloat((c >> 16) & 0xFF) / 255.0, green: CGFloat((c >> 8) & 0xFF) / 255.0, blue: CGFloat(c & 0xFF) / 255.0, alpha: CGFloat((c >> 24) & 0xFF) / 255.0)
     }
     
     static func toIcon(_ data: Any?, registrar: FlutterPluginRegistrar? = nil) -> UIImage? {

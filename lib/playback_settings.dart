@@ -8,7 +8,7 @@ class _PlaybackSettings {
   final Object? vehicleIcon;
   final Object? stopIcon;
   final bool drawTrail;
-  final String? polylineColor;
+  final int? polylineColor;
   final List<dynamic>? points;
   final bool autoStart;
 
