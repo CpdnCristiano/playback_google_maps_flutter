@@ -144,6 +144,10 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
   /// Called when the playback status (playing, paused, etc.) changes.
   final ValueChanged<String>? onPlaybackStatusChanged;
 
+  /// Called when playback pauses at a stop point. Receives the stop index.
+  /// Call [GoogleMapsPlusPlaybackController.resumeFromStop] to continue.
+  final ValueChanged<int>? onStopReached;
+
   const GoogleMapsPlusPlayback({
     super.key,
     required this.points,
@@ -183,6 +187,7 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
     this.gestureRecognizers,
     this.onProgress,
     this.onPlaybackStatusChanged,
+    this.onStopReached,
   });
 
   _MapSettings _getMapSettings() {
@@ -432,6 +437,12 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
           widget.onPlaybackStatusChanged?.call(status);
         }
         break;
+      case 'onStopReached':
+        final index = call.arguments['index'];
+        if (index is int) {
+          widget.onStopReached?.call(index);
+        }
+        break;
     }
   }
 
@@ -513,6 +524,11 @@ class GoogleMapsPlusPlaybackController extends GoogleMapsPlusController {
   /// Pauses the map playback.
   Future<void> pause() async {
     await channel.invokeMethod('pause');
+  }
+
+  /// Resumes playback after pausing at a stop point.
+  Future<void> resumeFromStop() async {
+    await channel.invokeMethod('resumeFromStop');
   }
 
   /// Seeks to a specific point in the list.

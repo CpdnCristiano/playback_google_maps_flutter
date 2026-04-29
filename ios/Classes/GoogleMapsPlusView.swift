@@ -117,6 +117,7 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
             setupMap(); result(nil)
         case "play": pManager?.play(); result(nil)
         case "pause": pManager?.pause(); result(nil)
+        case "resumeFromStop": pManager?.resumeFromStop(); result(nil)
         case "seek": pManager?.seekTo(args?["index"] as? Int ?? 0); result(nil)
         case "setSpeed": pManager?.setSpeed(args?["speed"] as? Int ?? 1); result(nil)
         case MethodNames.markersUpdate: manager?.applyMarkerUpdates(Convert.toMarkerUpdates(call.arguments)); result(nil)

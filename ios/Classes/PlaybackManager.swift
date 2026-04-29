@@ -32,6 +32,8 @@ class PlaybackManager: NSObject {
     private var playbackSpeed: Int = 1
     var isPlaying: Bool = false
     private var isPausedForStop: Bool = false
+    private var lastStopIndexPassed: Int = -1
+    private var trailPath = GMSMutablePath()
     
     private var displayLink: CADisplayLink?
     private var startTime: CFTimeInterval = 0
@@ -132,12 +134,31 @@ class PlaybackManager: NSObject {
         let segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
         let localT = segmentDist > 0 ? (currentGlobalDistance - cumulativeDistances[idx]) / segmentDist : 0.0
         channel.invokeMethod("onProgress", arguments: ["index": Double(idx) + localT])
+
+        if playbackSettings.showStops && points[idx].isStop && idx != lastStopIndexPassed {
+            lastStopIndexPassed = idx
+            pauseForStop(idx)
+        }
     }
 
     func pause() {
         isPlaying = false
+        isPausedForStop = false
         stopDisplayLink()
         channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "paused"])
+    }
+
+    private func pauseForStop(_ index: Int) {
+        isPausedForStop = true
+        channel.invokeMethod("onStopReached", arguments: ["index": index])
+        channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "stopped"])
+    }
+
+    func resumeFromStop() {
+        guard isPausedForStop else { return }
+        isPausedForStop = false
+        startAnimation()
+        channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "playing"])
     }
 
     private func stopDisplayLink() {
@@ -191,12 +212,10 @@ class PlaybackManager: NSObject {
         }
 
         if playbackSettings.drawTrail {
-            let path = GMSMutablePath()
-            for i in 0...idx {
-                path.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
-            }
-            path.add(pos)
-            progressPolyline?.path = path
+            // Acumula posição real (suavizada pelo Catmull-Rom) para a trilha
+            // não aparecer à frente do carro nas curvas
+            trailPath.add(pos)
+            progressPolyline?.path = trailPath
         }
     }
 
@@ -237,6 +256,9 @@ class PlaybackManager: NSObject {
         stopDisplayLink()
         currentGlobalDistance = 0.0
         isPlaying = false
+        isPausedForStop = false
+        lastStopIndexPassed = -1
+        trailPath = GMSMutablePath()
         vehicleMarker?.map = nil
         vehicleMarker = nil
         progressPolyline?.map = nil
