@@ -231,22 +231,17 @@ class PlaybackManager: NSObject {
         }
 
         if playbackSettings.drawTrail {
-    let segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
-    let t = segmentDist > 0 ? (distance - cumulativeDistances[idx]) / segmentDist : 0.0
-
-    // Só adiciona o ponto quando REALMENTE passou dele
-    if t >= 1.0 && idx > lastTrailIdx {
-        trailPath.add(CLLocationCoordinate2D(
-            latitude: points[idx].lat,
-            longitude: points[idx].lng
-        ))
-        lastTrailIdx = idx
-    }
-
-    // Sempre adiciona a posição atual (carro)
-    trailPath.add(pos)
-    progressPolyline?.path = trailPath
-}
+            // Adiciona waypoints JÁ completamente passados (exclusivo: ..<idx)
+            // Só entra no trail quando o carro já saiu daquele segmento
+            if idx > lastTrailIdx {
+                for i in Swift.max(0, lastTrailIdx + 1)..<idx {
+                    trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
+                }
+                lastTrailIdx = idx - 1
+            }
+            trailPath.add(pos)
+            progressPolyline?.path = trailPath
+        }
     }
 
     private func getSegmentIndexForDistance(_ distance: Double) -> Int {

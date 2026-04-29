@@ -204,13 +204,13 @@ class PlaybackManager(
         }
 
         if (playbackSettings.drawTrail) {
-            // Ancora nos waypoints exatos ao entrar em cada novo segmento,
-            // depois adiciona a posição Catmull-Rom — trilha nunca ultrapassa o carro
+            // Adiciona waypoints JÁ completamente passados (exclusivo: until idx)
+            // Só entra no trail quando o carro já saiu daquele segmento
             if (idx > lastTrailIdx) {
-                for (i in maxOf(0, lastTrailIdx + 1)..idx) {
+                for (i in maxOf(0, lastTrailIdx + 1) until idx) {
                     trailPoints.add(LatLng(points[i].lat, points[i].lng))
                 }
-                lastTrailIdx = idx
+                lastTrailIdx = idx - 1
             }
             trailPoints.add(pos)
             progressPolyline?.points = trailPoints.toList()
