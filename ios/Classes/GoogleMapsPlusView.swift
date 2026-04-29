@@ -81,7 +81,7 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
         if let polygons = mapSettings.initialPolygons { polygons.forEach { manager.addPolygon($0) } }
         
         if isPlaybackMode || playbackSettings.points != nil {
-            if playbackManager == nil { playbackManager = PlaybackManager(mapView: mapView, channel: channel) }
+            if playbackManager == nil { playbackManager = PlaybackManager(mapView: mapView, channel: channel, registrar: registrar) }
             guard let pManager = playbackManager else { return }
             pManager.playbackSettings = playbackSettings
             

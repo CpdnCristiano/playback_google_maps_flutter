@@ -146,27 +146,84 @@ class Convert {
         return .blue
     }
     
-    static func toIcon(_ data: Any?) -> UIImage? {
+    static func toIcon(_ data: Any?, registrar: FlutterPluginRegistrar? = nil) -> UIImage? {
         guard let list = data as? [Any], !list.isEmpty else { return nil }
         let type = list[0] as? String
+        let screenScale = UIScreen.main.scale
         switch type {
-        case "fromAsset", "fromAssetImage": if let assetName = list[1] as? String { return UIImage(named: assetName) }
-        case "fromBytes": if let bytes = list[1] as? FlutterStandardTypedData { return UIImage(data: bytes.data) }
-        case "asset": if let params = list[1] as? [String: Any], let assetName = params["assetName"] as? String { return UIImage(named: assetName) }
-        case "bytes": if let params = list[1] as? [String: Any], let bytes = params["byteData"] as? FlutterStandardTypedData { return UIImage(data: bytes.data) }
+        case "fromAsset":
+            if let assetName = list[1] as? String {
+                return loadAssetImage(assetName, registrar: registrar)
+            }
+        case "fromAssetImage":
+            // list: [type, assetName, pixelRatio, size:[w,h]]
+            if let assetName = list[1] as? String {
+                let image = loadAssetImage(assetName, registrar: registrar)
+                // Respeita o size explícito em pontos lógicos, ignora pixelRatio
+                if let img = image, list.count >= 4,
+                   let sizeList = list[3] as? [Any], sizeList.count >= 2,
+                   let w = toDouble(sizeList[0]), let h = toDouble(sizeList[1]), w > 0, h > 0 {
+                    return resizeImage(img, to: CGSize(width: w, height: h))
+                }
+                return image
+            }
+        case "fromBytes":
+            // Bytes já estão na resolução física da tela; aplicar screenScale para obter tamanho lógico correto
+            if let bytes = list[1] as? FlutterStandardTypedData {
+                if let image = UIImage(data: bytes.data, scale: screenScale) {
+                    return fixOrientation(image)
+                }
+            }
+        case "asset":
+            if let params = list[1] as? [String: Any], let assetName = params["assetName"] as? String {
+                return loadAssetImage(assetName, registrar: registrar)
+            }
+        case "bytes":
+            if let params = list[1] as? [String: Any], let bytes = params["byteData"] as? FlutterStandardTypedData {
+                if let image = UIImage(data: bytes.data, scale: screenScale) {
+                    return fixOrientation(image)
+                }
+            }
         default: return nil
         }
         return nil
     }
+
+    private static func loadAssetImage(_ assetName: String, registrar: FlutterPluginRegistrar?) -> UIImage? {
+        if let reg = registrar {
+            let key = reg.lookupKey(forAsset: assetName)
+            if let path = Bundle.main.path(forResource: key, ofType: nil) {
+                return UIImage(contentsOfFile: path)
+            }
+        }
+        return UIImage(named: assetName)
+    }
+
+    private static func fixOrientation(_ image: UIImage) -> UIImage {
+        guard image.imageOrientation != .up else { return image }
+        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale)
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        let result = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return result ?? image
+    }
+
+    private static func resizeImage(_ image: UIImage, to size: CGSize) -> UIImage {
+        UIGraphicsBeginImageContextWithOptions(size, false, UIScreen.main.scale)
+        image.draw(in: CGRect(origin: .zero, size: size))
+        let result = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return result ?? image
+    }
     
-    static func interpretMarker(_ m: [String: Any], marker: GMSMarker) {
+    static func interpretMarker(_ m: [String: Any], marker: GMSMarker, registrar: FlutterPluginRegistrar? = nil) {
         if let coord = toCoordinate(m["position"]) { marker.position = coord }
         if let anchor = m["anchor"] as? [Any], anchor.count >= 2 { marker.groundAnchor = CGPoint(x: toDouble(anchor[0]) ?? 0.5, y: toDouble(anchor[1]) ?? 0.5) }
         if let rotation = toDouble(m["rotation"]) { marker.rotation = rotation }
         if let zIndex = toDouble(m["zIndex"]) { marker.zIndex = Int32(zIndex) }
         if let flat = m["flat"] as? Bool { marker.isFlat = flat }
         if let opacity = toDouble(m["alpha"]) { marker.opacity = Float(opacity) }
-        if let iconData = m["icon"] { marker.icon = toIcon(iconData) }
+        if let iconData = m["icon"] { marker.icon = toIcon(iconData, registrar: registrar) }
     }
     
     static func interpretCircle(_ c: [String: Any], circle: GMSCircle) {

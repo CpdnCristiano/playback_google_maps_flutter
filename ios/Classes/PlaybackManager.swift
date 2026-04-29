@@ -5,6 +5,7 @@ import Flutter
 class PlaybackManager: NSObject {
     private let mapView: GMSMapView
     private let channel: FlutterMethodChannel
+    private let registrar: FlutterPluginRegistrar
     
     var playbackSettings = PlaybackSettings(
         baseSpeed: 60.0,
@@ -38,9 +39,10 @@ class PlaybackManager: NSObject {
     
     var followEnabled: Bool = true
 
-    init(mapView: GMSMapView, channel: FlutterMethodChannel) {
+    init(mapView: GMSMapView, channel: FlutterMethodChannel, registrar: FlutterPluginRegistrar) {
         self.mapView = mapView
         self.channel = channel
+        self.registrar = registrar
     }
 
     func setPoints(_ newPoints: [GoogleMapsPlaybackPoint]) {
@@ -72,7 +74,7 @@ class PlaybackManager: NSObject {
         marker.isFlat = true
         marker.zIndex = 10
         marker.map = mapView
-        marker.icon = Convert.toIcon(playbackSettings.vehicleIcon) ?? GMSMarker.markerImage(with: .cyan)
+        marker.icon = Convert.toIcon(playbackSettings.vehicleIcon, registrar: registrar) ?? GMSMarker.markerImage(with: .cyan)
         vehicleMarker = marker
 
         progressPolyline?.map = nil
@@ -221,7 +223,7 @@ class PlaybackManager: NSObject {
         marker.zIndex = 5
         marker.map = mapView
         marker.userData = "stop_\(index)"
-        marker.icon = Convert.toIcon(playbackSettings.stopIcon)
+        marker.icon = Convert.toIcon(playbackSettings.stopIcon, registrar: registrar)
         stopMarkers[index] = marker
     }
 

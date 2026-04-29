@@ -399,6 +399,19 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
     _channel = MethodChannel('br.com.cpndntech.google_maps_plus/map_$id');
     _channel!.setMethodCallHandler(_handleMethodCall);
     _controller = GoogleMapsPlusPlaybackController._(id);
+
+    // Se didUpdateWidget disparou antes do canal estar pronto (race condition
+    // com dados assíncronos), os updates foram ignorados. Reenviar as
+    // configurações atuais garante que o estado correto seja aplicado.
+    _channel!.invokeMethod('updateOptions', {
+      ...widget._getMapSettings().toJson(),
+      ...widget._getPlaybackSettings().toJson(),
+      'markers': widget.markers.map((e) => e.toJson()).toList(),
+      'circles': widget.circles.map((e) => e.toJson()).toList(),
+      'polylines': widget.polylines.map((e) => e.toJson()).toList(),
+      'polygons': widget.polygons.map((e) => e.toJson()).toList(),
+    });
+
     if (widget.onMapCreated != null) {
       widget.onMapCreated!(_controller!);
     }

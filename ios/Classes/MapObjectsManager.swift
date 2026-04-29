@@ -34,10 +34,10 @@ class MapObjectsManager: NSObject {
                 let rotation = Convert.toDouble(data["rotation"]) ?? 0.0
                 moveMarkerInternal(marker: existing, id: id, lat: pos.latitude, lng: pos.longitude, rotation: rotation)
             }
-            Convert.interpretMarker(data, marker: existing)
+            Convert.interpretMarker(data, marker: existing, registrar: registrar)
         } else {
             let marker = GMSMarker()
-            Convert.interpretMarker(data, marker: marker)
+            Convert.interpretMarker(data, marker: marker, registrar: registrar)
             marker.userData = id
             marker.map = mapView
             markers[id] = marker
@@ -51,7 +51,7 @@ class MapObjectsManager: NSObject {
 
     func updateMarkerIcon(id: String, iconData: Any) {
         guard let marker = markers[id] else { return }
-        marker.icon = Convert.toIcon(iconData)
+        marker.icon = Convert.toIcon(iconData, registrar: registrar)
     }
 
     func removeMarker(_ id: String) {
