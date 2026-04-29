@@ -3,7 +3,7 @@ import UIKit
 
 public class GoogleMapsPlusPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
-    let playbackFactory = GoogleMapsPlusPlaybackFactory(messenger: registrar.messenger())
+    let playbackFactory = GoogleMapsPlusPlaybackFactory(registrar: registrar)
     registrar.register(playbackFactory, withId: "br.com.cpndntech.google_maps_plus/playback")
     
     let plusFactory = GoogleMapsPlusFactory(registrar: registrar)
