@@ -279,9 +279,19 @@ class MapObjectsManager(private val googleMap: GoogleMap, private val density: F
         }
     }
 
-    fun showInfoWindow(id: String) {
+    fun showMarkerInfoWindow(id: String) {
         mainHandler.post {
             markers[id]?.showInfoWindow()
         }
+    }
+
+    fun hideMarkerInfoWindow(id: String) {
+        mainHandler.post {
+            markers[id]?.hideInfoWindow()
+        }
+    }
+
+    fun isMarkerInfoWindowShown(id: String): Boolean {
+        return markers[id]?.isInfoWindowShown ?: false
     }
 }

@@ -115,33 +115,33 @@ object Convert {
 
     fun toMarkerUpdates(data: Any?): MapObjectUpdates<MarkerData> {
         val map = data as? Map<String, Any> ?: return MapObjectUpdates(emptyList(), emptyList(), emptyList())
-        val add = (map["toAdd"] as? List<Map<String, Any>>)?.map { MarkerData(it["markerId"] as String, it) } ?: emptyList()
-        val change = (map["toChange"] as? List<Map<String, Any>>)?.map { MarkerData(it["markerId"] as String, it) } ?: emptyList()
-        val remove = (map["toRemove"] as? List<String>) ?: emptyList()
+        val add = (map["markersToAdd"] as? List<Map<String, Any>>)?.map { MarkerData(it["markerId"] as String, it) } ?: emptyList()
+        val change = (map["markersToChange"] as? List<Map<String, Any>>)?.map { MarkerData(it["markerId"] as String, it) } ?: emptyList()
+        val remove = (map["markerIdsToRemove"] as? List<String>) ?: emptyList()
         return MapObjectUpdates(add, change, remove)
     }
 
     fun toPolylineUpdates(data: Any?): MapObjectUpdates<PolylineData> {
         val map = data as? Map<String, Any> ?: return MapObjectUpdates(emptyList(), emptyList(), emptyList())
-        val add = (map["toAdd"] as? List<Map<String, Any>>)?.map { PolylineData(it["polylineId"] as String, it) } ?: emptyList()
-        val change = (map["toChange"] as? List<Map<String, Any>>)?.map { PolylineData(it["polylineId"] as String, it) } ?: emptyList()
-        val remove = (map["toRemove"] as? List<String>) ?: emptyList()
+        val add = (map["polylinesToAdd"] as? List<Map<String, Any>>)?.map { PolylineData(it["polylineId"] as String, it) } ?: emptyList()
+        val change = (map["polylinesToChange"] as? List<Map<String, Any>>)?.map { PolylineData(it["polylineId"] as String, it) } ?: emptyList()
+        val remove = (map["polylineIdsToRemove"] as? List<String>) ?: emptyList()
         return MapObjectUpdates(add, change, remove)
     }
 
     fun toCircleUpdates(data: Any?): MapObjectUpdates<CircleData> {
         val map = data as? Map<String, Any> ?: return MapObjectUpdates(emptyList(), emptyList(), emptyList())
-        val add = (map["toAdd"] as? List<Map<String, Any>>)?.map { CircleData(it["circleId"] as String, it) } ?: emptyList()
-        val change = (map["toChange"] as? List<Map<String, Any>>)?.map { CircleData(it["circleId"] as String, it) } ?: emptyList()
-        val remove = (map["toRemove"] as? List<String>) ?: emptyList()
+        val add = (map["circlesToAdd"] as? List<Map<String, Any>>)?.map { CircleData(it["circleId"] as String, it) } ?: emptyList()
+        val change = (map["circlesToChange"] as? List<Map<String, Any>>)?.map { CircleData(it["circleId"] as String, it) } ?: emptyList()
+        val remove = (map["circleIdsToRemove"] as? List<String>) ?: emptyList()
         return MapObjectUpdates(add, change, remove)
     }
 
     fun toPolygonUpdates(data: Any?): MapObjectUpdates<PolygonData> {
         val map = data as? Map<String, Any> ?: return MapObjectUpdates(emptyList(), emptyList(), emptyList())
-        val add = (map["toAdd"] as? List<Map<String, Any>>)?.map { PolygonData(it["polygonId"] as String, it) } ?: emptyList()
-        val change = (map["toChange"] as? List<Map<String, Any>>)?.map { PolygonData(it["polygonId"] as String, it) } ?: emptyList()
-        val remove = (map["toRemove"] as? List<String>) ?: emptyList()
+        val add = (map["polygonsToAdd"] as? List<Map<String, Any>>)?.map { PolygonData(it["polygonId"] as String, it) } ?: emptyList()
+        val change = (map["polygonsToChange"] as? List<Map<String, Any>>)?.map { PolygonData(it["polygonId"] as String, it) } ?: emptyList()
+        val remove = (map["polygonIdsToRemove"] as? List<String>) ?: emptyList()
         return MapObjectUpdates(add, change, remove)
     }
 

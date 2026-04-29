@@ -97,33 +97,33 @@ class Convert {
 
     static func toMarkerUpdates(_ data: Any?) -> MapObjectUpdates<MarkerData> {
         guard let map = data as? [String: Any] else { return MapObjectUpdates(toAdd: [], toChange: [], toRemove: []) }
-        let add = (map["toAdd"] as? [[String: Any]])?.map { MarkerData(id: $0["markerId"] as! String, data: $0) } ?? []
-        let change = (map["toChange"] as? [[String: Any]])?.map { MarkerData(id: $0["markerId"] as! String, data: $0) } ?? []
-        let remove = (map["toRemove"] as? [String]) ?? []
+        let add = (map["markersToAdd"] as? [[String: Any]])?.map { MarkerData(id: $0["markerId"] as! String, data: $0) } ?? []
+        let change = (map["markersToChange"] as? [[String: Any]])?.map { MarkerData(id: $0["markerId"] as! String, data: $0) } ?? []
+        let remove = (map["markerIdsToRemove"] as? [String]) ?? []
         return MapObjectUpdates(toAdd: add, toChange: change, toRemove: remove)
     }
 
     static func toPolylineUpdates(_ data: Any?) -> MapObjectUpdates<PolylineData> {
         guard let map = data as? [String: Any] else { return MapObjectUpdates(toAdd: [], toChange: [], toRemove: []) }
-        let add = (map["toAdd"] as? [[String: Any]])?.map { PolylineData(id: $0["polylineId"] as! String, data: $0) } ?? []
-        let change = (map["toChange"] as? [[String: Any]])?.map { PolylineData(id: $0["polylineId"] as! String, data: $0) } ?? []
-        let remove = (map["toRemove"] as? [String]) ?? []
+        let add = (map["polylinesToAdd"] as? [[String: Any]])?.map { PolylineData(id: $0["polylineId"] as! String, data: $0) } ?? []
+        let change = (map["polylinesToChange"] as? [[String: Any]])?.map { PolylineData(id: $0["polylineId"] as! String, data: $0) } ?? []
+        let remove = (map["polylineIdsToRemove"] as? [String]) ?? []
         return MapObjectUpdates(toAdd: add, toChange: change, toRemove: remove)
     }
 
     static func toCircleUpdates(_ data: Any?) -> MapObjectUpdates<CircleData> {
         guard let map = data as? [String: Any] else { return MapObjectUpdates(toAdd: [], toChange: [], toRemove: []) }
-        let add = (map["toAdd"] as? [[String: Any]])?.map { CircleData(id: $0["circleId"] as! String, data: $0) } ?? []
-        let change = (map["toChange"] as? [[String: Any]])?.map { CircleData(id: $0["circleId"] as! String, data: $0) } ?? []
-        let remove = (map["toRemove"] as? [String]) ?? []
+        let add = (map["circlesToAdd"] as? [[String: Any]])?.map { CircleData(id: $0["circleId"] as! String, data: $0) } ?? []
+        let change = (map["circlesToChange"] as? [[String: Any]])?.map { CircleData(id: $0["circleId"] as! String, data: $0) } ?? []
+        let remove = (map["circleIdsToRemove"] as? [String]) ?? []
         return MapObjectUpdates(toAdd: add, toChange: change, toRemove: remove)
     }
 
     static func toPolygonUpdates(_ data: Any?) -> MapObjectUpdates<PolygonData> {
         guard let map = data as? [String: Any] else { return MapObjectUpdates(toAdd: [], toChange: [], toRemove: []) }
-        let add = (map["toAdd"] as? [[String: Any]])?.map { PolygonData(id: $0["polygonId"] as! String, data: $0) } ?? []
-        let change = (map["toChange"] as? [[String: Any]])?.map { PolygonData(id: $0["polygonId"] as! String, data: $0) } ?? []
-        let remove = (map["toRemove"] as? [String]) ?? []
+        let add = (map["polygonsToAdd"] as? [[String: Any]])?.map { PolygonData(id: $0["polygonId"] as! String, data: $0) } ?? []
+        let change = (map["polygonsToChange"] as? [[String: Any]])?.map { PolygonData(id: $0["polygonId"] as! String, data: $0) } ?? []
+        let remove = (map["polygonIdsToRemove"] as? [String]) ?? []
         return MapObjectUpdates(toAdd: add, toChange: change, toRemove: remove)
     }
 

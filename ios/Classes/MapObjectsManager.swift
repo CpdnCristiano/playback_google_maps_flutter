@@ -163,4 +163,19 @@ class MapObjectsManager: NSObject {
         polygons.values.forEach { $0.map = nil }
         polygons.removeAll()
     }
+
+    func showMarkerInfoWindow(id: String) {
+        markers[id]?.map = mapView
+        mapView.selectedMarker = markers[id]
+    }
+
+    func hideMarkerInfoWindow(id: String) {
+        if mapView.selectedMarker == markers[id] {
+            mapView.selectedMarker = nil
+        }
+    }
+
+    func isMarkerInfoWindowShown(id: String) -> Bool {
+        return mapView.selectedMarker == markers[id]
+    }
 }

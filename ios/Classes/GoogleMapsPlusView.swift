@@ -140,6 +140,44 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
                 mapView.animate(to: GMSCameraPosition.camera(withTarget: CLLocationCoordinate2D(latitude: lat, longitude: lng), zoom: args?["zoom"] as? Float ?? 10))
             }
             result(nil)
+        case "move_camera_instant":
+            if let lat = args?["lat"] as? Double, let lng = args?["lng"] as? Double {
+                mapView.camera = GMSCameraPosition.camera(withTarget: CLLocationCoordinate2D(latitude: lat, longitude: lng), zoom: args?["zoom"] as? Float ?? 10)
+            }
+            result(nil)
+        case "map_get_zoom": result(mapView.camera.zoom)
+        case "map_get_bounds":
+            let bounds = GMSCoordinateBounds(region: mapView.projection.visibleRegion())
+            result([
+                "southwest": [bounds.southWest.latitude, bounds.southWest.longitude],
+                "northeast": [bounds.northEast.latitude, bounds.northEast.longitude]
+            ])
+        case "map_get_screen_coordinate":
+            if let lat = args?["lat"] as? Double, let lng = args?["lng"] as? Double {
+                let point = mapView.projection.point(for: CLLocationCoordinate2D(latitude: lat, longitude: lng))
+                result(["x": Double(point.x), "y": Double(point.y)])
+            } else { result(nil) }
+        case "map_get_latlng":
+            if let x = args?["x"] as? Double, let y = args?["y"] as? Double {
+                let coord = mapView.projection.coordinate(for: CGPoint(x: x, y: y))
+                result(["lat": coord.latitude, "lng": coord.longitude])
+            } else { result(nil) }
+        case "map_take_snapshot":
+            UIGraphicsBeginImageContextWithOptions(mapView.bounds.size, true, 0)
+            mapView.drawHierarchy(in: mapView.bounds, afterScreenUpdates: true)
+            let image = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+            if let data = image?.pngData() { result(FlutterStandardTypedData(bytes: data)) }
+            else { result(nil) }
+        case "marker_show_info_window":
+            if let id = args?["id"] as? String { manager?.showMarkerInfoWindow(id: id) }
+            result(nil)
+        case "marker_hide_info_window":
+            if let id = args?["id"] as? String { manager?.hideMarkerInfoWindow(id: id) }
+            result(nil)
+        case "marker_is_info_window_shown":
+            if let id = args?["id"] as? String { result(manager?.isMarkerInfoWindowShown(id: id) ?? false) }
+            else { result(false) }
         default: result(FlutterMethodNotImplemented)
         }
     }
@@ -156,12 +194,27 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
         return true
     }
     
-    public func mapView(_ mapView: GMSMapView, willMove gesture: Bool) {
-        if gesture {
-            playbackManager?.followEnabled = false
-            mapObjectsManager?.followEnabled = false
-            followTimer?.invalidate()
-        }
+    public func mapView(_ mapView: GMSMapView, didTapAt coordinate: CLLocationCoordinate2D) {
+        channel.invokeMethod("onMapTap", arguments: ["lat": coordinate.latitude, "lng": coordinate.longitude])
+    }
+    
+    public func mapView(_ mapView: GMSMapView, didLongPressAt coordinate: CLLocationCoordinate2D) {
+        channel.invokeMethod("onMapLongPress", arguments: ["lat": coordinate.latitude, "lng": coordinate.longitude])
+    }
+    
+    public func mapView(_ mapView: GMSMapView, didStartCameraPosition position: GMSCameraPosition) {
+        channel.invokeMethod("onCameraMoveStarted", arguments: ["reason": 1]) // 1 for GESTURE (simplified)
+    }
+    
+    public func mapView(_ mapView: GMSMapView, didChange position: GMSCameraPosition) {
+        channel.invokeMethod("onCameraMove", arguments: [
+            "position": [
+                "target": [position.target.latitude, position.target.longitude],
+                "zoom": position.zoom,
+                "tilt": position.viewingAngle,
+                "bearing": position.bearing
+            ]
+        ])
     }
     
     public func mapView(_ mapView: GMSMapView, idleAt position: GMSCameraPosition) {

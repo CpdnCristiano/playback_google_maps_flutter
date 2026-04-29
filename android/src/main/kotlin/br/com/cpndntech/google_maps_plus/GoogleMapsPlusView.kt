@@ -76,12 +76,33 @@ class GoogleMapsPlusView(
                 mapObjectsManager?.followEnabled = false
                 followHandler.removeCallbacks(followRunnable)
             }
+            channel.invokeMethod("onCameraMoveStarted", mapOf("reason" to reason))
+        }
+
+        map.setOnCameraMoveListener {
+            val pos = map.cameraPosition
+            channel.invokeMethod("onCameraMove", mapOf(
+                "position" to mapOf(
+                    "target" to listOf(pos.target.latitude, pos.target.longitude),
+                    "zoom" to pos.zoom,
+                    "tilt" to pos.tilt,
+                    "bearing" to pos.bearing
+                )
+            ))
         }
 
         map.setOnCameraIdleListener {
             followHandler.removeCallbacks(followRunnable)
             followHandler.postDelayed(followRunnable, 500)
             channel.invokeMethod("onCameraIdle", null)
+        }
+
+        map.setOnMapClickListener { latLng ->
+            channel.invokeMethod("onMapTap", mapOf("lat" to latLng.latitude, "lng" to latLng.longitude))
+        }
+
+        map.setOnMapLongClickListener { latLng ->
+            channel.invokeMethod("onMapLongPress", mapOf("lat" to latLng.latitude, "lng" to latLng.longitude))
         }
 
         map.setOnMarkerClickListener { marker ->
@@ -180,8 +201,62 @@ class GoogleMapsPlusView(
                 googleMap?.animateCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLngZoom(LatLng(lat, lng), (call.argument<Double>("zoom") ?: 10.0).toFloat()))
                 result.success(null)
             }
+            "move_camera_instant" -> {
+                val lat = call.argument<Double>("lat") ?: return
+                val lng = call.argument<Double>("lng") ?: return
+                googleMap?.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLngZoom(LatLng(lat, lng), (call.argument<Double>("zoom") ?: 10.0).toFloat()))
+                result.success(null)
+            }
             MethodNames.ZOOM_IN -> { googleMap?.animateCamera(com.google.android.gms.maps.CameraUpdateFactory.zoomIn()); result.success(null) }
             MethodNames.ZOOM_OUT -> { googleMap?.animateCamera(com.google.android.gms.maps.CameraUpdateFactory.zoomOut()); result.success(null) }
+            
+            "map_get_zoom" -> result.success(googleMap?.cameraPosition?.zoom?.toDouble())
+            "map_get_bounds" -> {
+                val bounds = googleMap?.projection?.visibleRegion?.latLngBounds
+                if (bounds != null) {
+                    result.success(mapOf(
+                        "southwest" to listOf(bounds.southwest.latitude, bounds.southwest.longitude),
+                        "northeast" to listOf(bounds.northeast.latitude, bounds.northeast.longitude)
+                    ))
+                } else result.success(null)
+            }
+            "map_get_screen_coordinate" -> {
+                val lat = call.argument<Double>("lat") ?: return
+                val lng = call.argument<Double>("lng") ?: return
+                val point = googleMap?.projection?.toScreenLocation(LatLng(lat, lng))
+                if (point != null) result.success(mapOf("x" to point.x, "y" to point.y))
+                else result.success(null)
+            }
+            "map_get_latlng" -> {
+                val x = call.argument<Int>("x") ?: return
+                val y = call.argument<Int>("y") ?: return
+                val latLng = googleMap?.projection?.fromScreenLocation(android.graphics.Point(x, y))
+                if (latLng != null) result.success(mapOf("lat" to latLng.latitude, "lng" to latLng.longitude))
+                else result.success(null)
+            }
+            "map_take_snapshot" -> {
+                googleMap?.snapshot { bitmap ->
+                    if (bitmap != null) {
+                        val stream = java.io.ByteArrayOutputStream()
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
+                        result.success(stream.toByteArray())
+                    } else result.success(null)
+                }
+            }
+            "marker_show_info_window" -> {
+                val id = call.argument<String>("id") ?: return
+                manager?.showMarkerInfoWindow(id)
+                result.success(null)
+            }
+            "marker_hide_info_window" -> {
+                val id = call.argument<String>("id") ?: return
+                manager?.hideMarkerInfoWindow(id)
+                result.success(null)
+            }
+            "marker_is_info_window_shown" -> {
+                val id = call.argument<String>("id") ?: return
+                result.success(manager?.isMarkerInfoWindowShown(id) ?: false)
+            }
             else -> result.notImplemented()
         }
     }

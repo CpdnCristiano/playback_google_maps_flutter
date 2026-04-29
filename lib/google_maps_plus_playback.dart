@@ -144,6 +144,21 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
   /// Called when the playback status (playing, paused, etc.) changes.
   final ValueChanged<String>? onPlaybackStatusChanged;
 
+  /// Called every time a [GoogleMapsPlusPlayback] is tapped.
+  final ArgumentCallback<LatLng>? onTap;
+
+  /// Called every time a [GoogleMapsPlusPlayback] is long pressed.
+  final ArgumentCallback<LatLng>? onLongPress;
+
+  /// Called when the camera starts moving.
+  final VoidCallback? onCameraMoveStarted;
+
+  /// Called repeatedly as the camera continues to move.
+  final CameraPositionCallback? onCameraMove;
+
+  /// Called when camera movement has ended.
+  final VoidCallback? onCameraIdle;
+
   const GoogleMapsPlusPlayback({
     super.key,
     required this.points,
@@ -183,6 +198,11 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
     this.gestureRecognizers,
     this.onProgress,
     this.onPlaybackStatusChanged,
+    this.onTap,
+    this.onLongPress,
+    this.onCameraMoveStarted,
+    this.onCameraMove,
+    this.onCameraIdle,
   });
 
   _MapSettings _getMapSettings() {
@@ -256,142 +276,20 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
     }
 
     if (!setEquals(widget.markers, oldWidget.markers)) {
-      final oldMarkers = {for (var m in oldWidget.markers) m.markerId: m};
-      final newMarkers = {for (var m in widget.markers) m.markerId: m};
-
-      final markersToAdd = widget.markers
-          .where((m) => !oldMarkers.containsKey(m.markerId))
-          .toList();
-      final markersToChange = widget.markers
-          .where(
-            (m) =>
-                oldMarkers.containsKey(m.markerId) &&
-                m != oldMarkers[m.markerId],
-          )
-          .toList();
-      final markerIdsToRemove = oldWidget.markers
-          .where((m) => !newMarkers.containsKey(m.markerId))
-          .map((m) => m.markerId.value)
-          .toList();
-
-      for (final marker in markersToAdd) {
-        _channel!.invokeMethod('marker_add', {'marker': marker.toJson()});
-      }
-
-      for (final marker in markersToChange) {
-        final oldMarker = oldMarkers[marker.markerId]!;
-
-        if (marker.position != oldMarker.position ||
-            marker.rotation != oldMarker.rotation) {
-          _channel!.invokeMethod('marker_move', {
-            'id': marker.markerId.value,
-            'lat': marker.position.latitude,
-            'lng': marker.position.longitude,
-            'rotation': marker.rotation,
-          });
-        }
-
-        if (marker.icon != oldMarker.icon) {
-          _channel!.invokeMethod('marker_icon', {
-            'id': marker.markerId.value,
-            'icon': marker.icon.toJson(),
-          });
-        }
-      }
-
-      for (final id in markerIdsToRemove) {
-        _channel!.invokeMethod('marker_remove', {'id': id});
-      }
+      final MarkerUpdates updates = MarkerUpdates.from(oldWidget.markers, widget.markers);
+      _channel!.invokeMethod('markers/update', updates.toJson());
     }
     if (!setEquals(widget.polylines, oldWidget.polylines)) {
-      debugPrint('Polylines have changed');
-      final oldPolylines = {for (var p in oldWidget.polylines) p.polylineId: p};
-      final newPolylines = {for (var p in widget.polylines) p.polylineId: p};
-
-      final polylinesToAdd = widget.polylines
-          .where((p) => !oldPolylines.containsKey(p.polylineId))
-          .toList();
-      final polylinesToChange = widget.polylines
-          .where(
-            (p) =>
-                oldPolylines.containsKey(p.polylineId) &&
-                p != oldPolylines[p.polylineId],
-          )
-          .toList();
-      final polylineIdsToRemove = oldWidget.polylines
-          .where((p) => !newPolylines.containsKey(p.polylineId))
-          .map((p) => p.polylineId.value)
-          .toList();
-
-      if (polylinesToAdd.isNotEmpty ||
-          polylinesToChange.isNotEmpty ||
-          polylineIdsToRemove.isNotEmpty) {
-        _channel!.invokeMethod('polylines/update', {
-          'toAdd': polylinesToAdd.map((p) => p.toJson()).toList(),
-          'toChange': polylinesToChange.map((p) => p.toJson()).toList(),
-          'toRemove': polylineIdsToRemove,
-        });
-      }
+      final PolylineUpdates updates = PolylineUpdates.from(oldWidget.polylines, widget.polylines);
+      _channel!.invokeMethod('polylines/update', updates.toJson());
     }
-
     if (!setEquals(widget.circles, oldWidget.circles)) {
-      final oldCircles = {for (var c in oldWidget.circles) c.circleId: c};
-      final newCircles = {for (var c in widget.circles) c.circleId: c};
-
-      final circlesToAdd = widget.circles
-          .where((c) => !oldCircles.containsKey(c.circleId))
-          .toList();
-      final circlesToChange = widget.circles
-          .where(
-            (c) =>
-                oldCircles.containsKey(c.circleId) &&
-                c != oldCircles[c.circleId],
-          )
-          .toList();
-      final circleIdsToRemove = oldWidget.circles
-          .where((c) => !newCircles.containsKey(c.circleId))
-          .map((c) => c.circleId.value)
-          .toList();
-
-      if (circlesToAdd.isNotEmpty ||
-          circlesToChange.isNotEmpty ||
-          circleIdsToRemove.isNotEmpty) {
-        _channel!.invokeMethod('circles/update', {
-          'toAdd': circlesToAdd.map((c) => c.toJson()).toList(),
-          'toChange': circlesToChange.map((c) => c.toJson()).toList(),
-          'toRemove': circleIdsToRemove,
-        });
-      }
+      final CircleUpdates updates = CircleUpdates.from(oldWidget.circles, widget.circles);
+      _channel!.invokeMethod('circles/update', updates.toJson());
     }
-
     if (!setEquals(widget.polygons, oldWidget.polygons)) {
-      final oldPolygons = {for (var p in oldWidget.polygons) p.polygonId: p};
-      final newPolygons = {for (var p in widget.polygons) p.polygonId: p};
-
-      final polygonsToAdd = widget.polygons
-          .where((p) => !oldPolygons.containsKey(p.polygonId))
-          .toList();
-      final polygonsToChange = widget.polygons
-          .where(
-            (p) =>
-                oldPolygons.containsKey(p.polygonId) &&
-                p != oldPolygons[p.polygonId],
-          )
-          .toList();
-      final polygonIdsToRemove = oldWidget.polygons
-          .where((p) => !newPolygons.containsKey(p.polygonId))
-          .map((p) => p.polygonId.value)
-          .toList();
-
-      if (polygonsToAdd.isNotEmpty ||
-          polygonsToChange.isNotEmpty ||
-          polygonIdsToRemove.isNotEmpty) {
-        _channel!.invokeMethod('polygons/update', {
-          'toAdd': polygonsToAdd.map((p) => p.toJson()).toList(),
-          'toChange': polygonsToChange.map((p) => p.toJson()).toList(),
-          'toRemove': polygonIdsToRemove,
-        });
-      }
+      final PolygonUpdates updates = PolygonUpdates.from(oldWidget.polygons, widget.polygons);
+      _channel!.invokeMethod('polygons/update', updates.toJson());
     }
   }
 
@@ -418,6 +316,40 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
         if (status is String) {
           widget.onPlaybackStatusChanged?.call(status);
         }
+        break;
+      case 'onMapTap':
+        if (widget.onTap != null) {
+          final lat = (call.arguments['lat'] as num).toDouble();
+          final lng = (call.arguments['lng'] as num).toDouble();
+          widget.onTap!(LatLng(lat, lng));
+        }
+        break;
+      case 'onMapLongPress':
+        if (widget.onLongPress != null) {
+          final lat = (call.arguments['lat'] as num).toDouble();
+          final lng = (call.arguments['lng'] as num).toDouble();
+          widget.onLongPress!(LatLng(lat, lng));
+        }
+        break;
+      case 'onCameraMoveStarted':
+        widget.onCameraMoveStarted?.call();
+        break;
+      case 'onCameraMove':
+        if (widget.onCameraMove != null) {
+          final pos = call.arguments['position'] as Map;
+          final target = pos['target'] as List;
+          widget.onCameraMove!(
+            CameraPosition(
+              target: LatLng(target[0], target[1]),
+              zoom: (pos['zoom'] as num).toDouble(),
+              tilt: (pos['tilt'] as num).toDouble(),
+              bearing: (pos['bearing'] as num).toDouble(),
+            ),
+          );
+        }
+        break;
+      case 'onCameraIdle':
+        widget.onCameraIdle?.call();
         break;
     }
   }
