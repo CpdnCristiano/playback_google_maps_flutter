@@ -152,6 +152,14 @@ class PlaybackManager: NSObject {
         isPausedForStop = true
         channel.invokeMethod("onStopReached", arguments: ["index": index])
         channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "stopped"])
+
+        let delay = 2.0 / Double(playbackSpeed)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self, self.isPausedForStop else { return }
+            self.isPausedForStop = false
+            self.startAnimation()
+            self.channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "playing"])
+        }
     }
 
     func resumeFromStop() {
