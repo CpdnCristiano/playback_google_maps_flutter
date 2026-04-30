@@ -60,12 +60,6 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
   /// Whether to show traffic on the map.
   final bool trafficEnabled;
 
-  /// Whether dark mode is enabled for the map.
-  final bool isDark;
-
-  /// Custom JSON style for dark mode or specific themes.
-  final String? darkModeStyle;
-
   /// Whether the vehicle icon should rotate based on bearing.
   final bool canRotate;
 
@@ -159,8 +153,6 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
     this.autoStart = false,
     this.mapType = MapType.normal,
     this.trafficEnabled = false,
-    this.isDark = false,
-    this.darkModeStyle,
     this.canRotate = true,
     this.dynamicRotation = false,
     this.baseSpeed = 60.0,
@@ -205,8 +197,6 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
       zoomGesturesEnabled: zoomGesturesEnabled,
       tiltGesturesEnabled: tiltGesturesEnabled,
       indoorViewEnabled: indoorViewEnabled,
-      isDark: isDark,
-      style: darkModeStyle,
       padding: [padding.top, padding.left, padding.bottom, padding.right],
       defaultSpeed: defaultSpeed,
       maxAnimationDuration: maxAnimationDuration.inMilliseconds.toDouble(),
@@ -239,10 +229,18 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
   @override
   void didUpdateWidget(GoogleMapsPlusPlayback oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    // Se o canal não está pronto, aguarda até _onPlatformViewCreated
+    // que vai aplicar tudo do widget.polygons, widget.markers, etc
     if (_channel == null) {
       return;
     }
 
+    _updateObjectsIfNeeded(oldWidget);
+    _updateSettingsIfNeeded(oldWidget);
+  }
+
+  void _updateSettingsIfNeeded(GoogleMapsPlusPlayback oldWidget) {
     // Update settings if they changed using OOP approach
     final prevMapSettings = oldWidget._getMapSettings();
     final currMapSettings = widget._getMapSettings();
@@ -258,9 +256,14 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
         ...currPlaybackSettings.toJson(),
       });
     }
+  }
 
-    if (!setEquals(widget.markers, oldWidget.markers)) {
-      final oldMarkers = {for (var m in oldWidget.markers) m.markerId: m};
+  void _updateObjectsIfNeeded(GoogleMapsPlusPlayback? oldWidget) {
+    // Markers
+    if (oldWidget == null || !setEquals(widget.markers, oldWidget.markers)) {
+      final oldMarkers = {
+        for (var m in oldWidget?.markers ?? <Marker>{}) m.markerId: m,
+      };
       final newMarkers = {for (var m in widget.markers) m.markerId: m};
 
       final markersToAdd = widget.markers
@@ -273,7 +276,7 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
                 m != oldMarkers[m.markerId],
           )
           .toList();
-      final markerIdsToRemove = oldWidget.markers
+      final markerIdsToRemove = (oldWidget?.markers ?? <Marker>{})
           .where((m) => !newMarkers.containsKey(m.markerId))
           .map((m) => m.markerId.value)
           .toList();
@@ -307,9 +310,14 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
         _channel!.invokeMethod('marker_remove', {'id': id});
       }
     }
-    if (!setEquals(widget.polylines, oldWidget.polylines)) {
+
+    // Polylines
+    if (oldWidget == null ||
+        !setEquals(widget.polylines, oldWidget.polylines)) {
       debugPrint('Polylines have changed');
-      final oldPolylines = {for (var p in oldWidget.polylines) p.polylineId: p};
+      final oldPolylines = {
+        for (var p in oldWidget?.polylines ?? <Polyline>{}) p.polylineId: p,
+      };
       final newPolylines = {for (var p in widget.polylines) p.polylineId: p};
 
       final polylinesToAdd = widget.polylines
@@ -322,7 +330,7 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
                 p != oldPolylines[p.polylineId],
           )
           .toList();
-      final polylineIdsToRemove = oldWidget.polylines
+      final polylineIdsToRemove = (oldWidget?.polylines ?? <Polyline>{})
           .where((p) => !newPolylines.containsKey(p.polylineId))
           .map((p) => p.polylineId.value)
           .toList();
@@ -338,8 +346,11 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
       }
     }
 
-    if (!setEquals(widget.circles, oldWidget.circles)) {
-      final oldCircles = {for (var c in oldWidget.circles) c.circleId: c};
+    // Circles
+    if (oldWidget == null || !setEquals(widget.circles, oldWidget.circles)) {
+      final oldCircles = {
+        for (var c in oldWidget?.circles ?? <Circle>{}) c.circleId: c,
+      };
       final newCircles = {for (var c in widget.circles) c.circleId: c};
 
       final circlesToAdd = widget.circles
@@ -352,7 +363,7 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
                 c != oldCircles[c.circleId],
           )
           .toList();
-      final circleIdsToRemove = oldWidget.circles
+      final circleIdsToRemove = (oldWidget?.circles ?? <Circle>{})
           .where((c) => !newCircles.containsKey(c.circleId))
           .map((c) => c.circleId.value)
           .toList();
@@ -368,8 +379,11 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
       }
     }
 
-    if (!setEquals(widget.polygons, oldWidget.polygons)) {
-      final oldPolygons = {for (var p in oldWidget.polygons) p.polygonId: p};
+    // Polygons
+    if (oldWidget == null || !setEquals(widget.polygons, oldWidget.polygons)) {
+      final oldPolygons = {
+        for (var p in oldWidget?.polygons ?? <Polygon>{}) p.polygonId: p,
+      };
       final newPolygons = {for (var p in widget.polygons) p.polygonId: p};
 
       final polygonsToAdd = widget.polygons
@@ -382,7 +396,7 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
                 p != oldPolygons[p.polygonId],
           )
           .toList();
-      final polygonIdsToRemove = oldWidget.polygons
+      final polygonIdsToRemove = (oldWidget?.polygons ?? <Polygon>{})
           .where((p) => !newPolygons.containsKey(p.polygonId))
           .map((p) => p.polygonId.value)
           .toList();
@@ -403,6 +417,9 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
     _channel = MethodChannel('br.com.cpndntech.google_maps_plus/map_$id');
     _channel!.setMethodCallHandler(_handleMethodCall);
     _controller = GoogleMapsPlusPlaybackController._(id);
+
+    // Aplica objetos iniciais do widget (markers, polylines, circles, polygons)
+    _updateObjectsIfNeeded(null);
 
     // Se didUpdateWidget disparou antes do canal estar pronto (race condition
     // com dados assíncronos), os updates foram ignorados. Reenviar as
@@ -544,16 +561,6 @@ class GoogleMapsPlusPlaybackController extends GoogleMapsPlusController {
     return Duration(milliseconds: (seconds * 1000).round());
   }
 
-  /// Zooms in on the map.
-  Future<void> zoomIn() {
-    return channel.invokeMethod('zoomIn');
-  }
-
-  /// Zooms out from the map.
-  Future<void> zoomOut() {
-    return channel.invokeMethod('zoomOut');
-  }
-
   /// Sets the playback speed multiplier (e.g., 1, 2, 4).
   Future<void> setSpeed(int speed) async {
     await channel.invokeMethod('setSpeed', {'speed': speed});
@@ -562,21 +569,6 @@ class GoogleMapsPlusPlaybackController extends GoogleMapsPlusController {
   /// Toggles the visibility of stop markers.
   Future<void> toggleStops(bool show) async {
     await channel.invokeMethod('toggleStops', {'show': show});
-  }
-
-  /// Sets the map type (1: Normal, 2: Satellite, 3: Terrain, 4: Hybrid).
-  Future<void> setMapType(int mapType) async {
-    await channel.invokeMethod('setMapType', {'mapType': mapType});
-  }
-
-  /// Enables or disables traffic display.
-  Future<void> setTrafficEnabled(bool enabled) async {
-    await channel.invokeMethod('setTrafficEnabled', {'enabled': enabled});
-  }
-
-  /// Updates the map style using a JSON string.
-  Future<void> setMapStyle(String? style) async {
-    await channel.invokeMethod('setMapStyle', {'style': style});
   }
 
   /// Toggles dark mode and optionally sets a custom style.

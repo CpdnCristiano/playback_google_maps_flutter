@@ -60,7 +60,8 @@ part 'map_settings.dart';
 part 'playback_settings.dart';
 part 'google_maps_plus_playback.dart';
 
-typedef GoogleMapsPlusCreatedCallback = void Function(GoogleMapsPlusController controller);
+typedef GoogleMapsPlusCreatedCallback =
+    void Function(GoogleMapsPlusController controller);
 
 class GoogleMapsPlus extends StatefulWidget {
   final MapType mapType;
@@ -94,9 +95,6 @@ class GoogleMapsPlus extends StatefulWidget {
   final dynamic clusterManagers; // Aceitando genericamente se houver
   final GoogleMapsPlusCreatedCallback? onMapCreated;
 
-  // Custom theme variables (if you still want to use your dark mode logic easily)
-  final bool isDark;
-  final String? darkModeStyle;
   final double defaultSpeed; // meters per second
   final Duration maxAnimationDuration;
 
@@ -132,8 +130,6 @@ class GoogleMapsPlus extends StatefulWidget {
     this.onCameraIdle,
     this.clusterManagers,
     this.onMapCreated,
-    this.isDark = false,
-    this.darkModeStyle,
     this.defaultSpeed = 60.0,
     this.maxAnimationDuration = const Duration(seconds: 5),
   });
@@ -153,8 +149,6 @@ class GoogleMapsPlus extends StatefulWidget {
       zoomGesturesEnabled: zoomGesturesEnabled,
       tiltGesturesEnabled: tiltGesturesEnabled,
       indoorViewEnabled: indoorViewEnabled,
-      isDark: isDark,
-      style: darkModeStyle,
       padding: [padding.top, padding.left, padding.bottom, padding.right],
       defaultSpeed: defaultSpeed,
       maxAnimationDuration: maxAnimationDuration.inMilliseconds.toDouble(),
@@ -183,7 +177,7 @@ class _GoogleMapsPlusState extends State<GoogleMapsPlus> {
   @override
   void didUpdateWidget(GoogleMapsPlus oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _updateCaches();
+
     if (_channel != null) {
       if (!setEquals(widget.markers, oldWidget.markers)) {
         _updateMarkers(oldWidget.markers, widget.markers);
@@ -192,17 +186,23 @@ class _GoogleMapsPlusState extends State<GoogleMapsPlus> {
         _updatePolylines(oldWidget.polylines, widget.polylines);
       }
       if (!setEquals(widget.circles, oldWidget.circles)) {
+        debugPrint('Updating circles');
         _updateCircles(oldWidget.circles, widget.circles);
       }
+      debugPrint(
+        'Updating polygons - old: ${oldWidget.polygons.length}, new: ${widget.polygons.length}',
+      );
       if (!setEquals(widget.polygons, oldWidget.polygons)) {
+        debugPrint('Updating polygons');
         _updatePolygons(oldWidget.polygons, widget.polygons);
       }
+      _updateCaches();
     }
 
     // Update settings if they changed
     final prevSettings = oldWidget._getSettings();
     final currSettings = widget._getSettings();
-    
+
     // Simplest way to check for changes is to compare JSON or specific fields.
     // In POO, we could implement operator == on MapSettings.
     if (currSettings.toJson().toString() != prevSettings.toJson().toString()) {
@@ -371,10 +371,13 @@ class _GoogleMapsPlusState extends State<GoogleMapsPlus> {
 
   void _updatePolygons(Set<Polygon> previous, Set<Polygon> current) {
     if (setEquals(previous, current)) return;
-
+    debugPrint(
+      'Updating polygons - old: ${previous.length}, new: ${current.length}',
+    );
     final Map<PolygonId, Polygon> prevMap = {
       for (final p in previous) p.polygonId: p,
     };
+
     final Map<PolygonId, Polygon> currMap = {
       for (final p in current) p.polygonId: p,
     };
@@ -401,7 +404,9 @@ class _GoogleMapsPlusState extends State<GoogleMapsPlus> {
         polygonsToChange.add(newPolygon);
       }
     }
-
+    debugPrint(
+      'Polygons to add: ${polygonsToAdd.length}, to change: ${polygonsToChange.length}, to remove: ${polygonIdsToRemove.length}',
+    );
     if (polygonsToAdd.isNotEmpty ||
         polygonsToChange.isNotEmpty ||
         polygonIdsToRemove.isNotEmpty) {
@@ -434,7 +439,8 @@ class _GoogleMapsPlusState extends State<GoogleMapsPlus> {
     const String viewType = 'br.com.cpndntech.google_maps_plus/plus';
 
     final Map<String, dynamic> creationParams = widget._getSettings().toJson();
-    creationParams['initialCameraPosition'] = widget.initialCameraPosition.toMap();
+    creationParams['initialCameraPosition'] = widget.initialCameraPosition
+        .toMap();
     creationParams['markers'] = widget.markers.map(_markerToMap).toList();
     creationParams['circles'] = widget.circles.map(_circleToMap).toList();
     creationParams['polylines'] = widget.polylines.map(_polylineToMap).toList();
@@ -721,5 +727,163 @@ class GoogleMapsPlusController {
     await channel.invokeMethod('marker_show_info_window', {
       'id': markerId.value,
     });
+  }
+
+  /// Hides the info window for a specific marker.
+  Future<void> hideMarkerInfoWindow(MarkerId markerId) async {
+    await channel.invokeMethod('marker_hide_info_window', {
+      'id': markerId.value,
+    });
+  }
+
+  /// Checks if the info window is shown for a specific marker.
+  Future<bool> isMarkerInfoWindowShown(MarkerId markerId) async {
+    final result = await channel.invokeMethod('marker_is_info_window_shown', {
+      'id': markerId.value,
+    });
+    return result as bool? ?? false;
+  }
+
+  // Map Configuration Methods
+
+  /// Sets the styling of the base map.
+  ///
+  /// Set to `null` to clear any previous custom styling.
+  ///
+  /// If problems were detected with the [mapStyle], including un-parsable
+  /// styling JSON, unrecognized feature type, unrecognized element type, or
+  /// invalid styler keys: the style is left unchanged.
+  ///
+  /// The style string can be generated using [map style tool](https://mapstyle.withgoogle.com/).
+  Future<void> setMapStyle(String? mapStyle) async {
+    await channel.invokeMethod('setMapStyle', {'style': mapStyle});
+  }
+
+  /// Changes the map camera position without animation.
+  Future<void> moveCamera(CameraUpdate cameraUpdate) async {
+    final json = (cameraUpdate as dynamic).toJson();
+
+    if (json is List && json.isNotEmpty) {
+      final type = json[0] as String;
+
+      switch (type) {
+        case 'newLatLng':
+          final List<dynamic> latLng = json[1];
+          await channel.invokeMethod('move_camera', {
+            'lat': latLng[0],
+            'lng': latLng[1],
+          });
+          break;
+
+        case 'newLatLngZoom':
+          final List<dynamic> latLng = json[1];
+          final double zoom = (json[2] as num).toDouble();
+          await channel.invokeMethod('move_camera', {
+            'lat': latLng[0],
+            'lng': latLng[1],
+            'zoom': zoom,
+          });
+          break;
+
+        case 'newCameraPosition':
+          final Map<dynamic, dynamic> pos = json[1];
+          final List<dynamic> target = pos['target'];
+          final double? zoom = pos['zoom']?.toDouble();
+          await channel.invokeMethod('move_camera', {
+            'lat': target[0],
+            'lng': target[1],
+            'zoom': zoom,
+          });
+          break;
+
+        default:
+          // Fallback to animateCamera for other types
+          await animateCamera(cameraUpdate);
+      }
+    }
+  }
+
+  /// Returns the current zoom level of the map.
+  Future<double> getZoomLevel() async {
+    final result = await channel.invokeMethod('getZoomLevel');
+    return (result as num?)?.toDouble() ?? 15.0;
+  }
+
+  /// Returns the visible region (LatLngBounds) of the map.
+  Future<LatLngBounds> getVisibleRegion() async {
+    final result = await channel.invokeMethod('getVisibleRegion');
+    if (result is Map) {
+      return LatLngBounds(
+        southwest: LatLng(result['swLat'] as double, result['swLng'] as double),
+        northeast: LatLng(result['neLat'] as double, result['neLng'] as double),
+      );
+    }
+    throw Exception('Failed to get visible region');
+  }
+
+  /// Returns screen coordinate for a given LatLng position.
+  Future<ScreenCoordinate> getScreenCoordinate(LatLng latLng) async {
+    final result = await channel.invokeMethod('getScreenCoordinate', {
+      'lat': latLng.latitude,
+      'lng': latLng.longitude,
+    });
+    if (result is Map) {
+      return ScreenCoordinate(
+        x: (result['x'] as num).toInt(),
+        y: (result['y'] as num).toInt(),
+      );
+    }
+    throw Exception('Failed to get screen coordinate');
+  }
+
+  /// Returns LatLng for a given screen coordinate.
+  Future<LatLng> getLatLng(ScreenCoordinate screenCoordinate) async {
+    final result = await channel.invokeMethod('getLatLng', {
+      'x': screenCoordinate.x,
+      'y': screenCoordinate.y,
+    });
+    if (result is Map) {
+      return LatLng(result['lat'] as double, result['lng'] as double);
+    }
+    throw Exception('Failed to get LatLng');
+  }
+
+  /// Takes a snapshot of the map and returns the image bytes.
+  Future<Uint8List?> takeSnapshot() async {
+    final result = await channel.invokeMethod('takeSnapshot');
+    return result as Uint8List?;
+  }
+
+  /// Sets the map type (normal, satellite, terrain, hybrid).
+  Future<void> setMapType(MapType mapType) async {
+    int type = 1; // normal
+    switch (mapType) {
+      case MapType.normal:
+        type = 1;
+        break;
+      case MapType.satellite:
+        type = 2;
+        break;
+      case MapType.terrain:
+        type = 3;
+        break;
+      case MapType.hybrid:
+        type = 4;
+        break;
+      case MapType.none:
+        type = 0;
+        break;
+    }
+    await channel.invokeMethod('setMapType', {'mapType': type});
+  }
+
+  /// Enables or disables traffic layer.
+  Future<void> setTrafficEnabled(bool enabled) async {
+    await channel.invokeMethod('setTrafficEnabled', {'enabled': enabled});
+  }
+
+  /// Enables or disables my location layer.
+  Future<void> setMyLocationEnabled(bool enabled) async {
+    await channel.invokeMethod('setMyLocationEnabled', {'enabled': enabled});
   }
 }

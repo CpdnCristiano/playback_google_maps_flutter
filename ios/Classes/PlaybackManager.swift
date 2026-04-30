@@ -85,7 +85,7 @@ class PlaybackManager: NSObject {
             let poly = GMSPolyline()
             poly.strokeWidth = 6
             poly.strokeColor = Convert.toColor(playbackSettings.polylineColor)
-            poly.geodesic = true
+            poly.geodesic = false
             poly.zIndex = 2
             poly.map = mapView
             progressPolyline = poly
@@ -231,16 +231,17 @@ class PlaybackManager: NSObject {
         }
 
         if playbackSettings.drawTrail {
-            // Adiciona waypoints JÁ completamente passados (exclusivo: ..<idx)
-            // Só entra no trail quando o carro já saiu daquele segmento
-            if idx > lastTrailIdx {
-                for i in Swift.max(0, lastTrailIdx + 1)..<idx {
-                    trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
-                }
-                lastTrailIdx = idx - 1
-            }
+        if playbackSettings.drawTrail {
             trailPath.add(pos)
             progressPolyline?.path = trailPath
+        }
+        
+        if playbackSettings.showStops {
+            for i in 0...idx {
+                if points[i].isStop {
+                    checkAndAddStop(i)
+                }
+            }
         }
     }
 
@@ -254,8 +255,10 @@ class PlaybackManager: NSObject {
     }
 
     private func renderStops() {
-        for (idx, pt) in points.enumerated() {
-            if pt.isStop { checkAndAddStop(idx) }
+        // Renderiza apenas os stops já passados
+        let currentIdx = getSegmentIndexForDistance(currentGlobalDistance)
+        for i in 0...currentIdx {
+            if points[i].isStop { checkAndAddStop(i) }
         }
     }
 

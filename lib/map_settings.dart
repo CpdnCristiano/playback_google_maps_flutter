@@ -14,8 +14,6 @@ class _MapSettings {
   final bool zoomGesturesEnabled;
   final bool tiltGesturesEnabled;
   final bool indoorViewEnabled;
-  final bool isDark;
-  final String? style;
   final List<double>? padding;
   final double defaultSpeed;
   final double maxAnimationDuration;
@@ -34,8 +32,6 @@ class _MapSettings {
     this.zoomGesturesEnabled = true,
     this.tiltGesturesEnabled = true,
     this.indoorViewEnabled = false,
-    this.isDark = false,
-    this.style,
     this.padding,
     this.defaultSpeed = 60.0,
     this.maxAnimationDuration = 2000.0,
@@ -56,8 +52,6 @@ class _MapSettings {
       'zoomGesturesEnabled': zoomGesturesEnabled,
       'tiltGesturesEnabled': tiltGesturesEnabled,
       'indoorViewEnabled': indoorViewEnabled,
-      'isDark': isDark,
-      'style': style,
       'padding': padding,
       'defaultSpeed': defaultSpeed,
       'maxAnimationDuration': maxAnimationDuration,

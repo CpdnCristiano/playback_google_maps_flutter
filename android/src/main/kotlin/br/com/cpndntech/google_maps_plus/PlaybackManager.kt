@@ -71,7 +71,7 @@ class PlaybackManager(
 
         progressPolyline?.remove()
         if (playbackSettings.drawTrail) {
-            progressPolyline = googleMap.addPolyline(PolylineOptions().width(5f * density).color(Convert.toColor(playbackSettings.polylineColor)).zIndex(2f).geodesic(true))
+            progressPolyline = googleMap.addPolyline(PolylineOptions().width(5f * density).color(Convert.toColor(playbackSettings.polylineColor)).zIndex(2f).geodesic(false))
         }
 
         if (playbackSettings.showStops) renderStops()
@@ -204,16 +204,16 @@ class PlaybackManager(
         }
 
         if (playbackSettings.drawTrail) {
-            // Adiciona waypoints JÁ completamente passados (exclusivo: until idx)
-            // Só entra no trail quando o carro já saiu daquele segmento
-            if (idx > lastTrailIdx) {
-                for (i in maxOf(0, lastTrailIdx + 1) until idx) {
-                    trailPoints.add(LatLng(points[i].lat, points[i].lng))
-                }
-                lastTrailIdx = idx - 1
-            }
             trailPoints.add(pos)
             progressPolyline?.points = trailPoints.toList()
+        }
+        
+        if (playbackSettings.showStops) {
+            for (i in 0..idx) {
+                if (points[i].isStop) {
+                    checkAndAddStop(i)
+                }
+            }
         }
     }
 
@@ -227,8 +227,10 @@ class PlaybackManager(
     }
 
     private fun renderStops() {
-        points.forEachIndexed { index, point ->
-            if (point.isStop) checkAndAddStop(index)
+        // Renderiza apenas os stops já passados
+        val currentIdx = getSegmentIndexForDistance(currentGlobalDistance)
+        for (i in 0..currentIdx) {
+            if (points[i].isStop) checkAndAddStop(i)
         }
     }
 

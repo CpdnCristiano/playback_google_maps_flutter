@@ -47,38 +47,18 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
         if mapObjectsManager == nil { mapObjectsManager = MapObjectsManager(mapView: mapView, registrar: registrar) }
         guard let manager = mapObjectsManager else { return }
         
-        switch mapSettings.mapType {
-        case 1: mapView.mapType = .normal
-        case 2: mapView.mapType = .satellite
-        case 3: mapView.mapType = .terrain
-        case 4: mapView.mapType = .hybrid
-        default: mapView.mapType = .normal
-        }
-        
-        mapView.mapStyle = mapSettings.isDark ? try? GMSMapStyle(jsonString: mapSettings.style ?? "") : nil
-        mapView.isTrafficEnabled = mapSettings.showTraffic
-        mapView.isBuildingsEnabled = mapSettings.showBuildings
-        mapView.isMyLocationEnabled = mapSettings.showUserLocation
-        
-        if let p = mapSettings.padding, p.count == 4 {
-            mapView.padding = UIEdgeInsets(top: CGFloat(p[0]), left: CGFloat(p[1]), bottom: CGFloat(p[2]), right: CGFloat(p[3]))
-        }
-        
-        let ui = mapView.settings
-        ui.myLocationButton = mapSettings.showMyLocationButton
-        ui.compassButton = mapSettings.compassEnabled
-        ui.rotateGestures = mapSettings.rotateGesturesEnabled
-        ui.scrollGestures = mapSettings.scrollGesturesEnabled
-        ui.zoomGestures = mapSettings.zoomGesturesEnabled
-        ui.tiltGestures = mapSettings.tiltGesturesEnabled
+        updateMapSettings()
         
         manager.defaultSpeed = mapSettings.defaultSpeed
         manager.maxAnimationDuration = mapSettings.maxAnimationDuration
         
-        if let markers = mapSettings.initialMarkers { manager.setAllMarkers(markers) }
-        if let circles = mapSettings.initialCircles { circles.forEach { manager.addCircle($0) } }
-        if let polylines = mapSettings.initialPolylines { polylines.forEach { manager.addPolyline($0) } }
-        if let polygons = mapSettings.initialPolygons { polygons.forEach { manager.addPolygon($0) } }
+        // Limpa objetos antigos e adiciona novos de forma atômica
+        manager.setupInitialObjects(
+            markers: mapSettings.initialMarkers,
+            circles: mapSettings.initialCircles,
+            polylines: mapSettings.initialPolylines,
+            polygons: mapSettings.initialPolygons
+        )
         
         if isPlaybackMode || playbackSettings.points != nil {
             if playbackManager == nil { playbackManager = PlaybackManager(mapView: mapView, channel: channel, registrar: registrar) }
@@ -104,6 +84,33 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
         }
     }
     
+    private func updateMapSettings() {
+        switch mapSettings.mapType {
+        case 1: mapView.mapType = .normal
+        case 2: mapView.mapType = .satellite
+        case 3: mapView.mapType = .terrain
+        case 4: mapView.mapType = .hybrid
+        default: mapView.mapType = .normal
+        }
+        
+        mapView.mapStyle = mapSettings.isDark ? try? GMSMapStyle(jsonString: mapSettings.style ?? "") : nil
+        mapView.isTrafficEnabled = mapSettings.showTraffic
+        mapView.isBuildingsEnabled = mapSettings.showBuildings
+        mapView.isMyLocationEnabled = mapSettings.showUserLocation
+        
+        if let p = mapSettings.padding, p.count == 4 {
+            mapView.padding = UIEdgeInsets(top: CGFloat(p[0]), left: CGFloat(p[1]), bottom: CGFloat(p[2]), right: CGFloat(p[3]))
+        }
+        
+        let ui = mapView.settings
+        ui.myLocationButton = mapSettings.showMyLocationButton
+        ui.compassButton = mapSettings.compassEnabled
+        ui.rotateGestures = mapSettings.rotateGesturesEnabled
+        ui.scrollGestures = mapSettings.scrollGesturesEnabled
+        ui.zoomGestures = mapSettings.zoomGesturesEnabled
+        ui.tiltGestures = mapSettings.tiltGesturesEnabled
+    }
+    
     private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         let manager = mapObjectsManager
         let pManager = playbackManager
@@ -111,10 +118,33 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
         
         switch call.method {
         case MethodNames.updateOptions:
+            let oldPoints = playbackSettings.points
             mapSettings = Convert.toMapSettings(args)
             playbackSettings = Convert.toPlaybackSettings(args)
-            pManager?.playbackSettings = playbackSettings
-            setupMap(); result(nil)
+            let newPoints = playbackSettings.points
+            
+            // Verifica se os pontos realmente mudaram (conteúdo, não referência)
+            let pointsChanged: Bool
+            switch (oldPoints, newPoints) {
+            case (nil, nil):
+                pointsChanged = false
+            case (nil, _), (_, nil):
+                pointsChanged = true
+            case let (old?, new?):
+                // Compara tamanho primeiro, depois conteúdo via string
+                pointsChanged = (old.count != new.count) || ("\(old)" != "\(new)")
+            }
+            
+            // Se os pontos mudaram, reinicia o playback
+            if pointsChanged {
+                pManager?.playbackSettings = playbackSettings
+                setupMap() // Reinicia tudo incluindo setupInitialState
+            } else {
+                // Se só mudaram configurações do mapa, apenas atualiza sem resetar
+                pManager?.playbackSettings = playbackSettings
+                updateMapSettings()
+            }
+            result(nil)
         case "play": pManager?.play(); result(nil)
         case "pause": pManager?.pause(); result(nil)
         case "resumeFromStop": pManager?.resumeFromStop(); result(nil)
@@ -130,6 +160,14 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
                 manager?.moveMarker(id: id, lat: lat, lng: lng, rotation: args?["rotation"] as? Double ?? 0.0)
             }
             result(nil)
+        case "marker_icon":
+            if let id = args?["id"] as? String {
+                let iconData = args?["icon"] ?? args?["bytes"]
+                if let data = iconData {
+                    manager?.updateMarkerIcon(id: id, iconData: data)
+                }
+            }
+            result(nil)
         case MethodNames.followMarker: 
             manager?.followedMarkerId = args?["id"] as? String
             manager?.followEnabled = true
@@ -141,6 +179,77 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
                 mapView.animate(to: GMSCameraPosition.camera(withTarget: CLLocationCoordinate2D(latitude: lat, longitude: lng), zoom: args?["zoom"] as? Float ?? 10))
             }
             result(nil)
+        
+        // Map configuration methods
+        case "setMapStyle":
+            if let style = args?["style"] as? String {
+                do {
+                    mapView.mapStyle = try GMSMapStyle(jsonString: style)
+                } catch {
+                    print("Map style error: \(error)")
+                }
+            } else {
+                mapView.mapStyle = nil
+            }
+            result(nil)
+        case "setMapType":
+            if let mapType = args?["mapType"] as? Int {
+                mapView.mapType = GMSMapViewType(rawValue: UInt(mapType)) ?? .normal
+            }
+            result(nil)
+        case "setTrafficEnabled":
+            mapView.isTrafficEnabled = args?["enabled"] as? Bool ?? false
+            result(nil)
+        case "setMyLocationEnabled":
+            mapView.isMyLocationEnabled = args?["enabled"] as? Bool ?? false
+            result(nil)
+        case "getZoomLevel":
+            result(Double(mapView.camera.zoom))
+        case "getVisibleRegion":
+            let bounds = GMSCoordinateBounds(region: mapView.projection.visibleRegion())
+            result([
+                "swLat": bounds.southWest.latitude,
+                "swLng": bounds.southWest.longitude,
+                "neLat": bounds.northEast.latitude,
+                "neLng": bounds.northEast.longitude
+            ])
+        case "getScreenCoordinate":
+            if let lat = args?["lat"] as? Double, let lng = args?["lng"] as? Double {
+                let point = mapView.projection.point(for: CLLocationCoordinate2D(latitude: lat, longitude: lng))
+                result(["x": Int(point.x), "y": Int(point.y)])
+            } else {
+                result(FlutterError(code: "ERROR", message: "Invalid arguments", details: nil))
+            }
+        case "getLatLng":
+            if let x = args?["x"] as? Int, let y = args?["y"] as? Int {
+                let coord = mapView.projection.coordinate(for: CGPoint(x: x, y: y))
+                result(["lat": coord.latitude, "lng": coord.longitude])
+            } else {
+                result(FlutterError(code: "ERROR", message: "Invalid arguments", details: nil))
+            }
+        case "takeSnapshot":
+            UIGraphicsBeginImageContextWithOptions(mapView.bounds.size, true, 0)
+            mapView.layer.render(in: UIGraphicsGetCurrentContext()!)
+            let image = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+            result(image?.pngData())
+        case "marker_show_info_window":
+            if let id = args?["id"] as? String {
+                manager?.showInfoWindow(id: id)
+            }
+            result(nil)
+        case "marker_hide_info_window":
+            if let id = args?["id"] as? String {
+                manager?.hideInfoWindow(id: id)
+            }
+            result(nil)
+        case "marker_is_info_window_shown":
+            if let id = args?["id"] as? String {
+                result(manager?.isInfoWindowShown(id: id) ?? false)
+            } else {
+                result(false)
+            }
+            
         default: result(FlutterMethodNotImplemented)
         }
     }

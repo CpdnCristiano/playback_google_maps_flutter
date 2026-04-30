@@ -163,4 +163,41 @@ class MapObjectsManager: NSObject {
         polygons.values.forEach { $0.map = nil }
         polygons.removeAll()
     }
+    
+    func setupInitialObjects(
+        markers: [[String: Any]]?,
+        circles: [[String: Any]]?,
+        polylines: [[String: Any]]?,
+        polygons: [[String: Any]]?
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.clearAll()
+            if let markers = markers {
+                self.setAllMarkers(markers)
+            }
+            circles?.forEach { self.addCircle($0) }
+            polylines?.forEach { self.addPolyline($0) }
+            polygons?.forEach { self.addPolygon($0) }
+        }
+    }
+    
+    func showInfoWindow(id: String) {
+        if let marker = markers[id] {
+            mapView.selectedMarker = marker
+        }
+    }
+    
+    func hideInfoWindow(id: String) {
+        if let marker = markers[id], mapView.selectedMarker === marker {
+            mapView.selectedMarker = nil
+        }
+    }
+    
+    func isInfoWindowShown(id: String) -> Bool {
+        if let marker = markers[id] {
+            return mapView.selectedMarker === marker
+        }
+        return false
+    }
 }

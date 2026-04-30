@@ -64,12 +64,6 @@ class GoogleMapsPlusView(
             playbackManager?.setPoints(pts)
         }
 
-        // Add initial objects
-        (creationParams?.get("markers") as? List<*>)?.forEach { (it as? Map<String, Any>)?.let { m -> mapObjectsManager?.addMarker(m) } }
-        (creationParams?.get("polylines") as? List<*>)?.forEach { (it as? Map<String, Any>)?.let { p -> mapObjectsManager?.addPolyline(p) } }
-        (creationParams?.get("circles") as? List<*>)?.forEach { (it as? Map<String, Any>)?.let { c -> mapObjectsManager?.addCircle(c) } }
-        (creationParams?.get("polygons") as? List<*>)?.forEach { (it as? Map<String, Any>)?.let { pg -> mapObjectsManager?.addPolygon(pg) } }
-
         map.setOnCameraMoveStartedListener { reason ->
             if (reason == GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE) {
                 playbackManager?.followEnabled = false
@@ -103,28 +97,18 @@ class GoogleMapsPlusView(
         val map = googleMap ?: return
         val manager = mapObjectsManager ?: return
         
-        map.mapType = mapSettings.mapType
-        map.isTrafficEnabled = mapSettings.showTraffic
-        map.isBuildingsEnabled = mapSettings.showBuildings
-        map.isMyLocationEnabled = mapSettings.showUserLocation
-        
-        val ui = map.uiSettings
-        ui.isMyLocationButtonEnabled = mapSettings.showMyLocationButton
-        ui.isCompassEnabled = mapSettings.compassEnabled
-        ui.isMapToolbarEnabled = mapSettings.mapToolbarEnabled
-        ui.isRotateGesturesEnabled = mapSettings.rotateGesturesEnabled
-        ui.isScrollGesturesEnabled = mapSettings.scrollGesturesEnabled
-        ui.isZoomControlsEnabled = mapSettings.zoomControlsEnabled
-        ui.isZoomGesturesEnabled = mapSettings.zoomGesturesEnabled
-        ui.isTiltGesturesEnabled = mapSettings.tiltGesturesEnabled
+        updateMapSettings()
         
         manager.defaultSpeed = mapSettings.defaultSpeed
         manager.maxAnimationDuration = mapSettings.maxAnimationDuration
         
-        mapSettings.initialMarkers?.forEach { manager.addMarker(it) }
-        mapSettings.initialCircles?.forEach { manager.addCircle(it) }
-        mapSettings.initialPolylines?.forEach { manager.addPolyline(it) }
-        mapSettings.initialPolygons?.forEach { manager.addPolygon(it) }
+        // Limpa objetos antigos e adiciona novos (tudo no main thread de forma síncrona)
+        manager.setupInitialObjects(
+            mapSettings.initialMarkers,
+            mapSettings.initialCircles,
+            mapSettings.initialPolylines,
+            mapSettings.initialPolygons
+        )
 
         if (isPlaybackMode || playbackSettings.points != null) {
             playbackManager?.setupInitialState()
@@ -140,16 +124,53 @@ class GoogleMapsPlusView(
         }
     }
 
+    private fun updateMapSettings() {
+        val map = googleMap ?: return
+        
+        map.mapType = mapSettings.mapType
+        map.isTrafficEnabled = mapSettings.showTraffic
+        map.isBuildingsEnabled = mapSettings.showBuildings
+        map.isMyLocationEnabled = mapSettings.showUserLocation
+        
+        val ui = map.uiSettings
+        ui.isMyLocationButtonEnabled = mapSettings.showMyLocationButton
+        ui.isCompassEnabled = mapSettings.compassEnabled
+        ui.isMapToolbarEnabled = mapSettings.mapToolbarEnabled
+        ui.isRotateGesturesEnabled = mapSettings.rotateGesturesEnabled
+        ui.isScrollGesturesEnabled = mapSettings.scrollGesturesEnabled
+        ui.isZoomControlsEnabled = mapSettings.zoomControlsEnabled
+        ui.isZoomGesturesEnabled = mapSettings.zoomGesturesEnabled
+        ui.isTiltGesturesEnabled = mapSettings.tiltGesturesEnabled
+    }
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         val manager = mapObjectsManager
         val pManager = playbackManager
         
         when (call.method) {
             MethodNames.UPDATE_OPTIONS -> {
+                val oldPoints = playbackSettings.points
                 mapSettings = Convert.toMapSettings(call.arguments)
                 playbackSettings = Convert.toPlaybackSettings(call.arguments)
-                pManager?.playbackSettings = playbackSettings
-                setupMap()
+                val newPoints = playbackSettings.points
+                
+                // Verifica se os pontos realmente mudaram (conteúdo, não referência)
+                val pointsChanged = when {
+                    oldPoints == null && newPoints == null -> false
+                    oldPoints == null || newPoints == null -> true
+                    oldPoints.size != newPoints.size -> true
+                    else -> oldPoints.toString() != newPoints.toString()
+                }
+                
+                // Se os pontos mudaram, reinicia o playback
+                if (pointsChanged) {
+                    pManager?.playbackSettings = playbackSettings
+                    setupMap() // Reinicia tudo incluindo setupInitialState
+                } else {
+                    // Se só mudaram configurações do mapa, apenas atualiza sem resetar
+                    pManager?.playbackSettings = playbackSettings
+                    updateMapSettings()
+                }
                 result.success(null)
             }
             // Playback specific
@@ -170,6 +191,12 @@ class GoogleMapsPlusView(
                 manager?.moveMarker(id, call.argument<Double>("lat") ?: 0.0, call.argument<Double>("lng") ?: 0.0, (call.argument<Double>("rotation") ?: 0.0).toFloat())
                 result.success(null)
             }
+            "marker_icon" -> {
+                val id = call.argument<String>("id") ?: return
+                val iconData = call.argument<Any>("icon") ?: call.argument<Any>("bytes") ?: return
+                manager?.updateMarkerIcon(id, iconData)
+                result.success(null)
+            }
             MethodNames.FOLLOW_MARKER -> { 
                 manager?.followedMarkerId = call.argument<String>("id")
                 manager?.followEnabled = true
@@ -183,6 +210,98 @@ class GoogleMapsPlusView(
             }
             MethodNames.ZOOM_IN -> { googleMap?.animateCamera(com.google.android.gms.maps.CameraUpdateFactory.zoomIn()); result.success(null) }
             MethodNames.ZOOM_OUT -> { googleMap?.animateCamera(com.google.android.gms.maps.CameraUpdateFactory.zoomOut()); result.success(null) }
+            
+            // Map configuration methods
+            "setMapStyle" -> {
+                val style = call.argument<String>("style")
+                if (style != null) {
+                    googleMap?.setMapStyle(com.google.android.gms.maps.model.MapStyleOptions(style))
+                } else {
+                    googleMap?.setMapStyle(null)
+                }
+                result.success(null)
+            }
+            "setMapType" -> {
+                val mapType = call.argument<Int>("mapType") ?: 1
+                googleMap?.mapType = mapType
+                result.success(null)
+            }
+            "setTrafficEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                googleMap?.isTrafficEnabled = enabled
+                result.success(null)
+            }
+            "setMyLocationEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                try {
+                    googleMap?.isMyLocationEnabled = enabled
+                } catch (e: SecurityException) {
+                    // Ignore if permissions are not granted
+                }
+                result.success(null)
+            }
+            "getZoomLevel" -> {
+                result.success(googleMap?.cameraPosition?.zoom?.toDouble() ?: 15.0)
+            }
+            "getVisibleRegion" -> {
+                val bounds = googleMap?.projection?.visibleRegion?.latLngBounds
+                if (bounds != null) {
+                    result.success(mapOf(
+                        "swLat" to bounds.southwest.latitude,
+                        "swLng" to bounds.southwest.longitude,
+                        "neLat" to bounds.northeast.latitude,
+                        "neLng" to bounds.northeast.longitude
+                    ))
+                } else {
+                    result.error("ERROR", "Failed to get visible region", null)
+                }
+            }
+            "getScreenCoordinate" -> {
+                val lat = call.argument<Double>("lat") ?: return
+                val lng = call.argument<Double>("lng") ?: return
+                val point = googleMap?.projection?.toScreenLocation(LatLng(lat, lng))
+                if (point != null) {
+                    result.success(mapOf("x" to point.x, "y" to point.y))
+                } else {
+                    result.error("ERROR", "Failed to get screen coordinate", null)
+                }
+            }
+            "getLatLng" -> {
+                val x = call.argument<Int>("x") ?: return
+                val y = call.argument<Int>("y") ?: return
+                val latLng = googleMap?.projection?.fromScreenLocation(android.graphics.Point(x, y))
+                if (latLng != null) {
+                    result.success(mapOf("lat" to latLng.latitude, "lng" to latLng.longitude))
+                } else {
+                    result.error("ERROR", "Failed to get LatLng", null)
+                }
+            }
+            "takeSnapshot" -> {
+                googleMap?.snapshot { bitmap ->
+                    if (bitmap != null) {
+                        val stream = java.io.ByteArrayOutputStream()
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
+                        result.success(stream.toByteArray())
+                    } else {
+                        result.success(null)
+                    }
+                }
+            }
+            "marker_show_info_window" -> {
+                val id = call.argument<String>("id") ?: return
+                mapObjectsManager?.showInfoWindow(id)
+                result.success(null)
+            }
+            "marker_hide_info_window" -> {
+                val id = call.argument<String>("id") ?: return
+                mapObjectsManager?.hideInfoWindow(id)
+                result.success(null)
+            }
+            "marker_is_info_window_shown" -> {
+                val id = call.argument<String>("id") ?: return
+                result.success(mapObjectsManager?.isInfoWindowShown(id) ?: false)
+            }
+            
             else -> result.notImplemented()
         }
     }

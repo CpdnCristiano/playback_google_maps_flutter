@@ -164,11 +164,16 @@ class MapObjectsManager(private val googleMap: GoogleMap, private val density: F
         return LatLngBounds(newSw, newNe)
     }
 
+    private fun refreshMap() {
+        googleMap.moveCamera(CameraUpdateFactory.scrollBy(0f, 0f))
+    }
+
     // SHAPES (CIRCLES, POLYLINES, POLYGONS)
     fun applyCircleUpdates(updates: MapObjectUpdates<CircleData>) {
         mainHandler.post {
             updates.toRemove.forEach { removeCircleInternal(it) }
             (updates.toAdd + updates.toChange).forEach { addCircleInternal(it.data) }
+            refreshMap()
         }
     }
 
@@ -200,8 +205,11 @@ class MapObjectsManager(private val googleMap: GoogleMap, private val density: F
     }
 
     fun applyPolylineUpdates(updates: MapObjectUpdates<PolylineData>) {
-        updates.toRemove.forEach { removePolylineInternal(it) }
-        (updates.toAdd + updates.toChange).forEach { addPolylineInternal(it.data) }
+        mainHandler.post {
+            updates.toRemove.forEach { removePolylineInternal(it) }
+            (updates.toAdd + updates.toChange).forEach { addPolylineInternal(it.data) }
+            refreshMap()
+        }
     }
 
     fun addPolyline(p: Map<String, Any>) {
@@ -232,8 +240,11 @@ class MapObjectsManager(private val googleMap: GoogleMap, private val density: F
     }
 
     fun applyPolygonUpdates(updates: MapObjectUpdates<PolygonData>) {
-        updates.toRemove.forEach { removePolygonInternal(it) }
-        (updates.toAdd + updates.toChange).forEach { addPolygonInternal(it.data) }
+        mainHandler.post {
+            updates.toRemove.forEach { removePolygonInternal(it) }
+            (updates.toAdd + updates.toChange).forEach { addPolygonInternal(it.data) }
+            refreshMap()
+        }
     }
 
     fun addPolygon(p: Map<String, Any>) {
@@ -265,17 +276,37 @@ class MapObjectsManager(private val googleMap: GoogleMap, private val density: F
 
     fun clearAll() {
         mainHandler.post {
-            markers.values.forEach { it.remove() }
-            markers.clear()
-            circles.values.forEach { it.remove() }
-            circles.clear()
-            polylines.values.forEach { it.remove() }
-            polylines.clear()
-            polygons.values.forEach { it.remove() }
-            polygons.clear()
-            animators.values.forEach { it.cancel() }
-            animators.clear()
-            pendingIcons.clear()
+            clearAllInternal()
+        }
+    }
+    
+    private fun clearAllInternal() {
+        markers.values.forEach { it.remove() }
+        markers.clear()
+        circles.values.forEach { it.remove() }
+        circles.clear()
+        polylines.values.forEach { it.remove() }
+        polylines.clear()
+        polygons.values.forEach { it.remove() }
+        polygons.clear()
+        animators.values.forEach { it.cancel() }
+        animators.clear()
+        pendingIcons.clear()
+    }
+    
+    fun setupInitialObjects(
+        markers: List<Map<String, Any>>?,
+        circles: List<Map<String, Any>>?,
+        polylines: List<Map<String, Any>>?,
+        polygons: List<Map<String, Any>>?
+    ) {
+        mainHandler.post {
+            clearAllInternal()
+            markers?.forEach { addMarkerInternal(it) }
+            circles?.forEach { addCircleInternal(it) }
+            polylines?.forEach { addPolylineInternal(it) }
+            polygons?.forEach { addPolygonInternal(it) }
+            refreshMap()
         }
     }
 
@@ -283,5 +314,15 @@ class MapObjectsManager(private val googleMap: GoogleMap, private val density: F
         mainHandler.post {
             markers[id]?.showInfoWindow()
         }
+    }
+
+    fun hideInfoWindow(id: String) {
+        mainHandler.post {
+            markers[id]?.hideInfoWindow()
+        }
+    }
+
+    fun isInfoWindowShown(id: String): Boolean {
+        return markers[id]?.isInfoWindowShown ?: false
     }
 }
