@@ -131,7 +131,7 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
             case (nil, _), (_, nil):
                 pointsChanged = true
             case let (old?, new?):
-                // Compara tamanho primeiro, depois conteúdo via string
+                // Compara tamanho e conteúdo como no Android
                 pointsChanged = (old.count != new.count) || ("\(old)" != "\(new)")
             }
             
