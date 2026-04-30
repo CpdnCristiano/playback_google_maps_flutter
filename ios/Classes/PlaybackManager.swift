@@ -231,7 +231,6 @@ class PlaybackManager: NSObject {
         }
 
         if playbackSettings.drawTrail {
-        if playbackSettings.drawTrail {
             trailPath.add(pos)
             progressPolyline?.path = trailPath
         }
