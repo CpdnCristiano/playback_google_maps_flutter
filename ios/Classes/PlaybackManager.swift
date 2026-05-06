@@ -73,6 +73,7 @@ class PlaybackManager: NSObject {
     private var displayLink: CADisplayLink?
     private var startTime: CFTimeInterval = 0
     private var distanceAtStartOfAnimation: Double = 0
+    private var animationDuration: CFTimeInterval = 0
     
     var followEnabled: Bool = true
 
@@ -170,16 +171,32 @@ class PlaybackManager: NSObject {
 
     private func startAnimation() {
         stopDisplayLink()
+
+        let speedMetersPerSecond = playbackSettings.baseSpeed * Double(playbackSpeed)
+        guard speedMetersPerSecond > 0 else {
+            isPlaying = false
+            return
+        }
+
         startTime = CACurrentMediaTime()
         distanceAtStartOfAnimation = currentGlobalDistance
+        animationDuration = max((totalDistance - distanceAtStartOfAnimation) / speedMetersPerSecond, 0)
+
         displayLink = CADisplayLink(target: self, selector: #selector(animationStep))
         displayLink?.add(to: .main, forMode: .common)
     }
 
     @objc private func animationStep() {
-        if !isPlaying || isPausedForStop { return }
+        if !isPlaying { return }
+
         let elapsed = CACurrentMediaTime() - startTime
-        currentGlobalDistance = distanceAtStartOfAnimation + elapsed * (playbackSettings.baseSpeed * Double(playbackSpeed))
+        let fraction: Double
+        if animationDuration > 0 {
+            fraction = min(max(elapsed / animationDuration, 0), 1)
+        } else {
+            fraction = 1
+        }
+        currentGlobalDistance = distanceAtStartOfAnimation + (totalDistance - distanceAtStartOfAnimation) * fraction
         
         if currentGlobalDistance >= totalDistance {
             currentGlobalDistance = totalDistance
@@ -303,7 +320,7 @@ class PlaybackManager: NSObject {
         applyVehicleAppearance(heading: heading)
 
         if followEnabled {
-            mapView.animate(toLocation: pos)
+            mapView.moveCamera(GMSCameraUpdate.setTarget(pos))
         }
 
         if playbackSettings.drawTrail {
