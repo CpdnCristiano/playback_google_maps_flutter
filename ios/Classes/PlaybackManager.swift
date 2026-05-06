@@ -74,7 +74,7 @@ class PlaybackManager: NSObject {
     private var displayLink: CADisplayLink?
     private var startTime: CFTimeInterval = 0
     private var distanceAtStartOfAnimation: Double = 0
-    private var animationDuration: CFTimeInterval = 0
+    private var animationDurationMs: Int64 = 0
     
     var followEnabled: Bool = true
 
@@ -173,15 +173,27 @@ class PlaybackManager: NSObject {
     private func startAnimation() {
         stopDisplayLink()
 
-        let speedMetersPerSecond = playbackSettings.baseSpeed * Double(playbackSpeed)
-        guard speedMetersPerSecond > 0 else {
+        guard playbackSettings.baseSpeed > 0, playbackSpeed > 0 else {
             isPlaying = false
+            return
+        }
+
+        // Keep the exact same duration math used on Android (ValueAnimator):
+        // durationMs = (((remainingDistance / baseSpeed) * 1000) / playbackSpeed).toLong()
+        let remainingDistance = max(totalDistance - currentGlobalDistance, 0)
+        let rawDurationMs = ((remainingDistance / playbackSettings.baseSpeed) * 1000.0) / Double(playbackSpeed)
+        animationDurationMs = Int64(rawDurationMs)
+
+        if animationDurationMs <= 0 {
+            currentGlobalDistance = totalDistance
+            updateVehiclePosition(totalDistance)
+            isPlaying = false
+            channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "finished"])
             return
         }
 
         startTime = CACurrentMediaTime()
         distanceAtStartOfAnimation = currentGlobalDistance
-        animationDuration = max((totalDistance - distanceAtStartOfAnimation) / speedMetersPerSecond, 0)
 
         displayLink = CADisplayLink(target: self, selector: #selector(animationStep))
         displayLink?.add(to: .main, forMode: .common)
@@ -190,13 +202,8 @@ class PlaybackManager: NSObject {
     @objc private func animationStep() {
         if !isPlaying { return }
 
-        let elapsed = CACurrentMediaTime() - startTime
-        let fraction: Double
-        if animationDuration > 0 {
-            fraction = min(max(elapsed / animationDuration, 0), 1)
-        } else {
-            fraction = 1
-        }
+        let elapsedMs = Int64((CACurrentMediaTime() - startTime) * 1000.0)
+        let fraction = min(max(Double(elapsedMs) / Double(animationDurationMs), 0), 1)
         currentGlobalDistance = distanceAtStartOfAnimation + (totalDistance - distanceAtStartOfAnimation) * fraction
         
         if currentGlobalDistance >= totalDistance {
