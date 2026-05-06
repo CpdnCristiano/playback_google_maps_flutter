@@ -68,7 +68,6 @@ class PlaybackManager: NSObject {
     private var isPausedForStop: Bool = false
     private var lastStopIndexPassed: Int = -1
     private var lastTrailIdx: Int = -1
-    private var trailPath = GMSMutablePath()
     private var maxRenderedStopIndex: Int = -1  // Controla até qual índice renderizar stops
     
     private var displayLink: CADisplayLink?
@@ -251,21 +250,13 @@ class PlaybackManager: NSObject {
         }
         maxRenderedStopIndex = idx - 1  // Não reconstrói stops além deste índice
 
-        // A trilha snapped é reconstruída no updateVehiclePosition; o fallback usa os pontos originais.
-        trailPath = GMSMutablePath()
-        if snappedSegments.isEmpty {
-            for i in 0..<idx {
-                trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
-            }
-            lastTrailIdx = idx - 1
-            progressPolyline?.path = trailPath
-        } else {
-            lastTrailIdx = -1
-            progressPolyline?.path = trailPath
-        }
+        // Inicializa polyline vazia, será preenchida em updateVehiclePosition
+        lastTrailIdx = -1
+        let emptyPath = GMSMutablePath()
+        progressPolyline?.path = emptyPath
 
         updateVehiclePosition(currentGlobalDistance)  // adiciona a posição interpolada atual
-        channel.invokeMethod("onProgress", arguments: ["index": Double(idx)])
+        channel.invokeMethod("onProgress", arguments: ["index": Double(idx))]
     }
 
     func setSpeed(_ speed: Int) {
@@ -319,16 +310,16 @@ class PlaybackManager: NSObject {
             if let snappedProgress {
                 progressPolyline?.path = buildTrailFromSnappedRoute(currentSegmentIndex: idx, currentProgress: snappedProgress)
             } else {
-                if idx > lastTrailIdx {
-                    for i in (lastTrailIdx + 1)...idx {
-                        if i < points.count {
-                            let pt = points[i]
-                            trailPath.add(CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lng))
-                        }
+                // Reconstrói polyline completa incrementando pontos passados
+                let path = GMSMutablePath()
+                for i in 0...idx {
+                    if i < points.count {
+                        let pt = points[i]
+                        path.add(CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lng))
                     }
-                    lastTrailIdx = idx
                 }
-                progressPolyline?.path = trailPath
+                progressPolyline?.path = path
+                lastTrailIdx = idx
             }
         }
         
@@ -725,7 +716,6 @@ class PlaybackManager: NSObject {
         lastStopIndexPassed = -1
         lastTrailIdx = -1
         maxRenderedStopIndex = -1
-        trailPath = GMSMutablePath()
         vehicleMarker?.map = nil
         vehicleMarker = nil
         progressPolyline?.map = nil
