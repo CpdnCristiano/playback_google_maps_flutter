@@ -680,13 +680,9 @@ class PlaybackManager: NSObject {
     private func prepareVehicleIcons() {
         let fallback = GMSMarker.markerImage(with: .cyan)
         let normal = Convert.toIcon(playbackSettings.vehicleIcon, registrar: registrar)
-        vehicleIconNormal = normal ?? fallback
-
-        if let source = normal ?? fallback {
-            vehicleIconFlipped = flipImageHorizontally(source)
-        } else {
-            vehicleIconFlipped = vehicleIconNormal
-        }
+        let source = normal ?? fallback
+        vehicleIconNormal = source
+        vehicleIconFlipped = flipImageHorizontally(source)
     }
 
     private func flipImageHorizontally(_ image: UIImage) -> UIImage {
