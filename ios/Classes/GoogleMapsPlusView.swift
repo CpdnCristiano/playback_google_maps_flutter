@@ -144,6 +144,27 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
                 pManager?.setPoints(newPoints)
             }
             result(nil)
+        case "setSnappedRoute":
+            if let routeData = args?["route"] as? [[String: Any]] {
+                let snappedRoute = routeData.map {
+                    CLLocationCoordinate2D(
+                        latitude: $0["lat"] as? Double ?? 0.0,
+                        longitude: $0["lng"] as? Double ?? 0.0
+                    )
+                }
+                let anchors = (args?["anchors"] as? [[String: Any]] ?? []).map {
+                    PlaybackManager.RouteAnchor(
+                        point: CLLocationCoordinate2D(
+                            latitude: $0["lat"] as? Double ?? 0.0,
+                            longitude: $0["lng"] as? Double ?? 0.0
+                        ),
+                        shapeIndex: $0["shapeIndex"] as? Int ?? 0,
+                        shapeFraction: $0["shapeFraction"] as? Double ?? 0.0
+                    )
+                }
+                pManager?.setSnappedRoute(snappedRoute, anchors: anchors)
+            }
+            result(nil)
         case "setSpeed": pManager?.setSpeed(args?["speed"] as? Int ?? 1); result(nil)
         case MethodNames.markersUpdate: manager?.applyMarkerUpdates(Convert.toMarkerUpdates(call.arguments)); result(nil)
         case MethodNames.polylinesUpdate: manager?.applyPolylineUpdates(Convert.toPolylineUpdates(call.arguments)); result(nil)

@@ -33,6 +33,10 @@ class GoogleMapsPlaybackPoint {
 typedef GoogleMapsPlusPlaybackCreatedCallback =
     void Function(GoogleMapsPlusPlaybackController controller);
 
+/// Builder for loading state while native map is deferred.
+typedef GoogleMapsPlusPlaybackLoadingBuilder =
+    Widget Function(BuildContext context);
+
 /// A widget that displays a native Google Maps view with playback capabilities.
 class GoogleMapsPlusPlayback extends StatefulWidget {
   /// The list of points to be played back.
@@ -142,6 +146,12 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
   /// Call [GoogleMapsPlusPlaybackController.resumeFromStop] to continue.
   final ValueChanged<int>? onStopReached;
 
+  /// If true, delays native view creation until snapped route data is ready.
+  final bool deferNativeUntilSnappedRoute;
+
+  /// Optional loading UI while native view creation is deferred.
+  final GoogleMapsPlusPlaybackLoadingBuilder? loadingBuilder;
+
   const GoogleMapsPlusPlayback({
     super.key,
     required this.points,
@@ -180,6 +190,8 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
     this.onProgress,
     this.onPlaybackStatusChanged,
     this.onStopReached,
+    this.deferNativeUntilSnappedRoute = true,
+    this.loadingBuilder,
   });
 
   _MapSettings _getMapSettings() {
@@ -224,10 +236,118 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
 class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
   MethodChannel? _channel;
   GoogleMapsPlusPlaybackController? _controller;
+  int _snappedRouteRequestId = 0;
+  bool _isPreparingSnappedRoute = false;
+  ValhallaRouteData? _pendingRouteData;
+
+  bool _didPointsChange(
+    List<GoogleMapsPlaybackPoint> oldPoints,
+    List<GoogleMapsPlaybackPoint> newPoints,
+  ) {
+    return newPoints.length != oldPoints.length ||
+        newPoints.asMap().entries.any(
+          (e) =>
+              e.value.lat != oldPoints[e.key].lat ||
+              e.value.lng != oldPoints[e.key].lng ||
+              e.value.bearing != oldPoints[e.key].bearing ||
+              e.value.isStop != oldPoints[e.key].isStop,
+        );
+  }
+
+  Future<void> _prepareSnappedRouteForRender() async {
+    if (!widget.deferNativeUntilSnappedRoute || widget.points.length < 2) {
+      if (mounted) {
+        setState(() {
+          _isPreparingSnappedRoute = false;
+          _pendingRouteData = null;
+        });
+      }
+      return;
+    }
+
+    final requestId = ++_snappedRouteRequestId;
+    if (mounted) {
+      setState(() {
+        _isPreparingSnappedRoute = true;
+      });
+    }
+
+    final rawPoints = widget.points
+        .map((p) => LatLng(p.lat, p.lng))
+        .toList(growable: false);
+
+    try {
+      final routeData = await ValhallaHelper.getSnappedRouteData(rawPoints);
+      if (!mounted || requestId != _snappedRouteRequestId) {
+        return;
+      }
+
+      setState(() {
+        _pendingRouteData = routeData;
+        _isPreparingSnappedRoute = false;
+      });
+
+      if (_controller != null) {
+        await _controller!.setSnappedRouteData(routeData);
+      }
+    } catch (e) {
+      if (!mounted || requestId != _snappedRouteRequestId) {
+        return;
+      }
+
+      setState(() {
+        _pendingRouteData = null;
+        _isPreparingSnappedRoute = false;
+      });
+      debugPrint('GoogleMapsPlusPlayback: failed to prepare snapped route: $e');
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _prepareSnappedRouteForRender();
+  }
+
+  Future<void> _syncSnappedRouteFromPoints() async {
+    final controller = _controller;
+    if (controller == null || widget.points.length < 2) {
+      return;
+    }
+
+    final requestId = ++_snappedRouteRequestId;
+    final rawPoints = widget.points
+        .map((p) => LatLng(p.lat, p.lng))
+        .toList(growable: false);
+
+    try {
+      final routeData = await ValhallaHelper.getSnappedRouteData(rawPoints);
+      if (!mounted ||
+          _controller == null ||
+          requestId != _snappedRouteRequestId) {
+        return;
+      }
+
+      await _controller!.setSnappedRouteData(routeData);
+      debugPrint(
+        'GoogleMapsPlusPlayback: snapped route synced (route=${routeData.route.length}, anchors=${routeData.anchors.length})',
+      );
+    } catch (e) {
+      debugPrint('GoogleMapsPlusPlayback: failed to sync snapped route: $e');
+    }
+  }
 
   @override
   void didUpdateWidget(GoogleMapsPlusPlayback oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    final pointsChanged = _didPointsChange(oldWidget.points, widget.points);
+
+    if (pointsChanged ||
+        oldWidget.deferNativeUntilSnappedRoute !=
+            widget.deferNativeUntilSnappedRoute) {
+      _prepareSnappedRouteForRender();
+    }
 
     // Se o canal não está pronto, aguarda até _onPlatformViewCreated
     // que vai aplicar tudo do widget.polygons, widget.markers, etc
@@ -235,20 +355,12 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
       return;
     }
 
-    // Verifica se os pontos realmente mudaram (tamanho ou conteúdo)
-    final pointsChanged =
-        widget.points.length != oldWidget.points.length ||
-        widget.points.asMap().entries.any(
-          (e) =>
-              e.value.lat != oldWidget.points[e.key].lat ||
-              e.value.lng != oldWidget.points[e.key].lng ||
-              e.value.bearing != oldWidget.points[e.key].bearing ||
-              e.value.isStop != oldWidget.points[e.key].isStop,
-        );
-
     // Se os pontos mudaram, atualiza
     if (pointsChanged) {
       _controller?.updatePoints(widget.points);
+      if (!widget.deferNativeUntilSnappedRoute) {
+        _syncSnappedRouteFromPoints();
+      }
     }
 
     _updateObjectsIfNeeded(oldWidget);
@@ -448,6 +560,15 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
       'polygons': widget.polygons.map((e) => e.toJson()).toList(),
     });
 
+    if (_pendingRouteData != null) {
+      _controller!.setSnappedRouteData(_pendingRouteData!);
+      debugPrint(
+        'GoogleMapsPlusPlayback: applying cached snapped route (route=${_pendingRouteData!.route.length}, anchors=${_pendingRouteData!.anchors.length})',
+      );
+    } else if (!widget.deferNativeUntilSnappedRoute) {
+      _syncSnappedRouteFromPoints();
+    }
+
     if (widget.onMapCreated != null) {
       widget.onMapCreated!(_controller!);
     }
@@ -479,6 +600,11 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isPreparingSnappedRoute) {
+      return widget.loadingBuilder?.call(context) ??
+          const Center(child: CircularProgressIndicator());
+    }
+
     const String viewType = 'br.com.cpndntech.google_maps_plus/playback';
 
     final Map<String, dynamic> creationParams = {
@@ -573,6 +699,25 @@ class GoogleMapsPlusPlaybackController extends GoogleMapsPlusController {
     await channel.invokeMethod('updatePoints', {
       'points': points.map((p) => p.toJson()).toList(),
     });
+  }
+
+  /// Sets a snapped/smoothed route from Valhalla to use for animation.
+  /// This makes the playback follow the actual road path instead of interpolating between points.
+  Future<void> setSnappedRoute(
+    List<LatLng> snappedRoute, {
+    List<ValhallaRouteAnchor>? anchors,
+  }) async {
+    await channel.invokeMethod('setSnappedRoute', {
+      'route': snappedRoute
+          .map((p) => {'lat': p.latitude, 'lng': p.longitude})
+          .toList(),
+      if (anchors != null)
+        'anchors': anchors.map((anchor) => anchor.toJson()).toList(),
+    });
+  }
+
+  Future<void> setSnappedRouteData(ValhallaRouteData routeData) async {
+    await setSnappedRoute(routeData.route, anchors: routeData.anchors);
   }
 
   /// Gets the estimated exact duration of the animation.

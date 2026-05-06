@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
+import 'helpers/valhalla_helper.dart';
 
 export 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart'
     show

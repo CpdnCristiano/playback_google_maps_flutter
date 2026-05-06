@@ -1,8 +1,34 @@
 import Foundation
 import GoogleMaps
 import Flutter
+import UIKit
 
 class PlaybackManager: NSObject {
+    struct RouteAnchor {
+        let point: CLLocationCoordinate2D
+        let shapeIndex: Int
+        let shapeFraction: Double
+    }
+
+    private struct SnappedSegment {
+        let points: [CLLocationCoordinate2D]
+        let cumulativeDistances: [Double]
+        let totalDistance: Double
+    }
+
+    private struct SnappedProgress {
+        let position: CLLocationCoordinate2D
+        let heading: Double
+        let trailPoints: [CLLocationCoordinate2D]
+    }
+
+    private struct RouteProjection {
+        let segmentIndex: Int
+        let fraction: Double
+        let point: CLLocationCoordinate2D
+        let distance: Double
+    }
+
     private let mapView: GMSMapView
     private let channel: FlutterMethodChannel
     private let registrar: FlutterPluginRegistrar
@@ -21,10 +47,15 @@ class PlaybackManager: NSObject {
     )
     
     private var points: [GoogleMapsPlaybackPoint] = []
+    private var snappedRoute: [CLLocationCoordinate2D] = []  // Rota completa da Valhalla
+    private var routeAnchors: [RouteAnchor] = []
+    private var snappedSegments: [SnappedSegment] = []
     private var cumulativeDistances: [Double] = []
     private var totalDistance: Double = 0.0
     
     private var vehicleMarker: GMSMarker?
+    private var vehicleIconNormal: UIImage?
+    private var vehicleIconFlipped: UIImage?
     private var progressPolyline: GMSPolyline?
     private var stopMarkers: [Int: GMSMarker] = [:]
     
@@ -52,8 +83,16 @@ class PlaybackManager: NSObject {
     func setPoints(_ newPoints: [GoogleMapsPlaybackPoint]) {
         self.points = newPoints
         calculateDistances()
+        buildSnappedSegments()
         reset()
         setupInitialState()  // Reconstrói o estado inicial com novos pontos
+    }
+
+    func setSnappedRoute(_ newSnappedRoute: [CLLocationCoordinate2D], anchors: [RouteAnchor] = []) {
+        self.snappedRoute = newSnappedRoute
+        self.routeAnchors = anchors
+        buildSnappedSegments()
+        NSLog("PlaybackManager: Snapped route set with \(newSnappedRoute.count) points")
     }
 
     private func calculateDistances() {
@@ -70,8 +109,19 @@ class PlaybackManager: NSObject {
 
     func setupInitialState() {
         if points.isEmpty { return }
+
+        prepareVehicleIcons()
         
         let firstPos = CLLocationCoordinate2D(latitude: points[0].lat, longitude: points[0].lng)
+        let initialHeading: Double = {
+            if points.count > 1 {
+                return computeHeading(
+                    from: firstPos,
+                    to: CLLocationCoordinate2D(latitude: points[1].lat, longitude: points[1].lng)
+                )
+            }
+            return points[0].bearing
+        }()
         
         vehicleMarker?.map = nil
         let marker = GMSMarker(position: firstPos)
@@ -79,8 +129,10 @@ class PlaybackManager: NSObject {
         marker.isFlat = true
         marker.zIndex = 10
         marker.map = mapView
-        marker.icon = Convert.toIcon(playbackSettings.vehicleIcon, registrar: registrar) ?? GMSMarker.markerImage(with: .cyan)
+        marker.icon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
         vehicleMarker = marker
+
+        applyVehicleAppearance(heading: initialHeading)
 
         progressPolyline?.map = nil
         if playbackSettings.drawTrail {
@@ -191,13 +243,18 @@ class PlaybackManager: NSObject {
         }
         maxRenderedStopIndex = idx - 1  // Não reconstrói stops além deste índice
 
-        // Reconstrói a trilha com os waypoints anteriores ao índice buscado
+        // A trilha snapped é reconstruída no updateVehiclePosition; o fallback usa os pontos originais.
         trailPath = GMSMutablePath()
-        for i in 0..<idx {
-            trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
+        if snappedSegments.isEmpty {
+            for i in 0..<idx {
+                trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
+            }
+            lastTrailIdx = idx - 1
+            progressPolyline?.path = trailPath
+        } else {
+            lastTrailIdx = -1
+            progressPolyline?.path = trailPath
         }
-        lastTrailIdx = idx - 1  // updateVehiclePosition ancora em points[idx] ao rodar
-        progressPolyline?.path = trailPath
 
         updateVehiclePosition(currentGlobalDistance)  // adiciona a posição interpolada atual
         channel.invokeMethod("onProgress", arguments: ["index": Double(idx)])
@@ -216,32 +273,55 @@ class PlaybackManager: NSObject {
         let idx = getSegmentIndexForDistance(distance)
         let segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
         let t = segmentDist > 0 ? (distance - cumulativeDistances[idx]) / segmentDist : 0.0
+        let snappedProgress = getProgressOnSnappedSegment(idx, segmentT: t)
         
-        let p1 = points[idx]
-        let p2 = points[idx + 1]
-        let p0 = idx > 0 ? points[idx - 1] : p1
-        let p3 = idx + 2 < points.count ? points[idx + 2] : p2
-        
-        let pos = interpolateCatmullRom(p0: p0, p1: p1, p2: p2, p3: p3, t: t)
+        let pos: CLLocationCoordinate2D
+        if let snappedProgress {
+            pos = snappedProgress.position
+        } else {
+            // Fallback: interpolar entre pontos originais (Catmull-Rom)
+            let p1 = points[idx]
+            let p2 = points[idx + 1]
+            let p0 = idx > 0 ? points[idx - 1] : p1
+            let p3 = idx + 2 < points.count ? points[idx + 2] : p2
+            
+            pos = interpolateCatmullRom(p0: p0, p1: p1, p2: p2, p3: p3, t: t)
+        }
         
         vehicleMarker?.position = pos
-        if playbackSettings.canRotate {
-            let rotation: Double
-            if playbackSettings.dynamicRotation {
-                rotation = getCatmullRomHeading(p0: p0, p1: p1, p2: p2, p3: p3, t: t)
-            } else {
-                rotation = points[idx].bearing
-            }
-            vehicleMarker?.rotation = rotation
+        let heading: Double
+        if let snappedProgress {
+            heading = snappedProgress.heading
+        } else if playbackSettings.dynamicRotation {
+            let p1 = points[idx]
+            let p2 = points[idx + 1]
+            let p0 = idx > 0 ? points[idx - 1] : p1
+            let p3 = idx + 2 < points.count ? points[idx + 2] : p2
+            heading = getCatmullRomHeading(p0: p0, p1: p1, p2: p2, p3: p3, t: t)
+        } else {
+            heading = points[idx].bearing
         }
+        applyVehicleAppearance(heading: heading)
 
         if followEnabled {
             mapView.animate(toLocation: pos)
         }
 
         if playbackSettings.drawTrail {
-            trailPath.add(pos)
-            progressPolyline?.path = trailPath
+            if let snappedProgress {
+                progressPolyline?.path = buildTrailFromSnappedRoute(currentSegmentIndex: idx, currentProgress: snappedProgress)
+            } else {
+                if idx > lastTrailIdx {
+                    for i in (lastTrailIdx + 1)...idx {
+                        if i < points.count {
+                            let pt = points[i]
+                            trailPath.add(CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lng))
+                        }
+                    }
+                    lastTrailIdx = idx
+                }
+                progressPolyline?.path = trailPath
+            }
         }
         
         if playbackSettings.showStops {
@@ -256,6 +336,250 @@ class PlaybackManager: NSObject {
                 }
             }
         }
+    }
+
+    private func buildSnappedSegments() {
+        guard points.count >= 2, snappedRoute.count >= 2 else {
+            snappedSegments = []
+            return
+        }
+
+        var segments: [SnappedSegment] = []
+        if routeAnchors.count == points.count {
+            for i in 0..<(points.count - 1) {
+                let startProjection = anchorToProjection(routeAnchors[i])
+                let endProjection = anchorToProjection(routeAnchors[i + 1])
+                let safeEndProjection = routeOrder(endProjection) < routeOrder(startProjection)
+                    ? startProjection
+                    : endProjection
+                let segmentPoints = buildSegmentPoints(from: startProjection, to: safeEndProjection)
+                segments.append(createSnappedSegment(segmentPoints))
+            }
+            snappedSegments = segments
+            return
+        }
+
+        var previousProjection: RouteProjection?
+
+        for i in 0..<(points.count - 1) {
+            let startPoint = CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng)
+            let endPoint = CLLocationCoordinate2D(latitude: points[i + 1].lat, longitude: points[i + 1].lng)
+            let startProjection = previousProjection ?? findProjectionOnSnappedRoute(
+                to: startPoint,
+                minSegmentIndex: 0,
+                minFraction: 0
+            )
+            var endProjection = findProjectionOnSnappedRoute(
+                to: endPoint,
+                minSegmentIndex: startProjection.segmentIndex,
+                minFraction: startProjection.fraction
+            )
+
+            if routeOrder(endProjection) < routeOrder(startProjection) {
+                endProjection = startProjection
+            }
+
+            let segmentPoints = buildSegmentPoints(from: startProjection, to: endProjection)
+            segments.append(createSnappedSegment(segmentPoints))
+            previousProjection = endProjection
+        }
+
+        snappedSegments = segments
+    }
+
+    private func anchorToProjection(_ anchor: RouteAnchor) -> RouteProjection {
+        let safeShapeIndex = min(max(anchor.shapeIndex, 0), snappedRoute.count - 2)
+        return RouteProjection(
+            segmentIndex: safeShapeIndex,
+            fraction: min(max(anchor.shapeFraction, 0), 1),
+            point: anchor.point,
+            distance: 0
+        )
+    }
+
+    private func buildSegmentPoints(from start: RouteProjection, to end: RouteProjection) -> [CLLocationCoordinate2D] {
+        guard !snappedRoute.isEmpty else { return [] }
+
+        var segmentPoints: [CLLocationCoordinate2D] = [start.point]
+
+        if start.segmentIndex == end.segmentIndex {
+            if !sameCoordinate(start.point, end.point) {
+                segmentPoints.append(end.point)
+            }
+            return segmentPoints
+        }
+
+        for vertexIndex in (start.segmentIndex + 1)...end.segmentIndex {
+            segmentPoints.append(snappedRoute[vertexIndex])
+        }
+
+        if !sameCoordinate(segmentPoints.last, end.point) {
+            segmentPoints.append(end.point)
+        }
+
+        return segmentPoints
+    }
+
+    private func createSnappedSegment(_ segmentPoints: [CLLocationCoordinate2D]) -> SnappedSegment {
+        guard !segmentPoints.isEmpty else {
+            return SnappedSegment(points: [], cumulativeDistances: [0.0], totalDistance: 0.0)
+        }
+
+        var cumulativeDistances: [Double] = [0.0]
+        var totalDistance: Double = 0.0
+
+        for i in 0..<(segmentPoints.count - 1) {
+            totalDistance += distanceBetween(segmentPoints[i], segmentPoints[i + 1])
+            cumulativeDistances.append(totalDistance)
+        }
+
+        return SnappedSegment(points: segmentPoints, cumulativeDistances: cumulativeDistances, totalDistance: totalDistance)
+    }
+
+    private func findProjectionOnSnappedRoute(
+        to target: CLLocationCoordinate2D,
+        minSegmentIndex: Int,
+        minFraction: Double
+    ) -> RouteProjection {
+        let safeMinSegmentIndex = min(max(minSegmentIndex, 0), snappedRoute.count - 2)
+        var bestProjection: RouteProjection?
+
+        for segmentIndex in safeMinSegmentIndex..<(snappedRoute.count - 1) {
+            let projection = projectPointOnSegment(
+                target,
+                start: snappedRoute[segmentIndex],
+                end: snappedRoute[segmentIndex + 1],
+                segmentIndex: segmentIndex
+            )
+
+            if segmentIndex == safeMinSegmentIndex && projection.fraction < minFraction {
+                continue
+            }
+
+            if bestProjection == nil || projection.distance < bestProjection!.distance {
+                bestProjection = projection
+            }
+        }
+
+        return bestProjection ?? RouteProjection(
+            segmentIndex: safeMinSegmentIndex,
+            fraction: minFraction,
+            point: snappedRoute[safeMinSegmentIndex],
+            distance: distanceBetween(target, snappedRoute[safeMinSegmentIndex])
+        )
+    }
+
+    private func projectPointOnSegment(
+        _ target: CLLocationCoordinate2D,
+        start: CLLocationCoordinate2D,
+        end: CLLocationCoordinate2D,
+        segmentIndex: Int
+    ) -> RouteProjection {
+        let averageLatRad = ((start.latitude + end.latitude + target.latitude) / 3.0) * .pi / 180.0
+        let cosLat = cos(averageLatRad)
+
+        let ax = start.longitude * cosLat
+        let ay = start.latitude
+        let bx = end.longitude * cosLat
+        let by = end.latitude
+        let px = target.longitude * cosLat
+        let py = target.latitude
+
+        let abx = bx - ax
+        let aby = by - ay
+        let ab2 = abx * abx + aby * aby
+        let rawFraction = ab2 > 0 ? ((px - ax) * abx + (py - ay) * aby) / ab2 : 0
+        let fraction = min(max(rawFraction, 0), 1)
+
+        let projected = CLLocationCoordinate2D(
+            latitude: start.latitude + fraction * (end.latitude - start.latitude),
+            longitude: start.longitude + fraction * (end.longitude - start.longitude)
+        )
+
+        return RouteProjection(
+            segmentIndex: segmentIndex,
+            fraction: fraction,
+            point: projected,
+            distance: distanceBetween(target, projected)
+        )
+    }
+
+    private func getProgressOnSnappedSegment(_ segmentIndex: Int, segmentT: Double) -> SnappedProgress? {
+        guard snappedSegments.indices.contains(segmentIndex) else { return nil }
+        let segment = snappedSegments[segmentIndex]
+        guard !segment.points.isEmpty else { return nil }
+
+        if segment.points.count == 1 || segment.totalDistance <= 0 {
+            let point = segment.points[0]
+            return SnappedProgress(position: point, heading: points[segmentIndex].bearing, trailPoints: [point])
+        }
+
+        let targetDistance = min(max(segment.totalDistance * segmentT, 0), segment.totalDistance)
+
+        for i in 0..<(segment.points.count - 1) {
+            let startDistance = segment.cumulativeDistances[i]
+            let endDistance = segment.cumulativeDistances[i + 1]
+            if targetDistance <= endDistance || i == segment.points.count - 2 {
+                let edgeDistance = endDistance - startDistance
+                let localT = edgeDistance > 0 ? min(max((targetDistance - startDistance) / edgeDistance, 0), 1) : 0.0
+                let startPoint = segment.points[i]
+                let endPoint = segment.points[i + 1]
+                let position = CLLocationCoordinate2D(
+                    latitude: startPoint.latitude + localT * (endPoint.latitude - startPoint.latitude),
+                    longitude: startPoint.longitude + localT * (endPoint.longitude - startPoint.longitude)
+                )
+
+                var trailPoints = Array(segment.points[0...i])
+                if !sameCoordinate(trailPoints.last, position) {
+                    trailPoints.append(position)
+                }
+
+                return SnappedProgress(position: position, heading: computeHeading(from: startPoint, to: endPoint), trailPoints: trailPoints)
+            }
+        }
+
+        guard let lastPoint = segment.points.last else { return nil }
+        return SnappedProgress(
+            position: lastPoint,
+            heading: computeHeading(from: segment.points[segment.points.count - 2], to: lastPoint),
+            trailPoints: segment.points
+        )
+    }
+
+    private func buildTrailFromSnappedRoute(currentSegmentIndex: Int, currentProgress: SnappedProgress) -> GMSMutablePath {
+        let path = GMSMutablePath()
+
+        for segmentIndex in 0..<currentSegmentIndex {
+            appendTrailPoints(to: path, additions: snappedSegments[segmentIndex].points)
+        }
+
+        appendTrailPoints(to: path, additions: currentProgress.trailPoints)
+        return path
+    }
+
+    private func appendTrailPoints(to path: GMSMutablePath, additions: [CLLocationCoordinate2D]) {
+        guard !additions.isEmpty else { return }
+        let shouldSkipFirst = path.count() > 0 && sameCoordinate(path.coordinate(at: path.count() - 1), additions.first)
+        let startIndex = shouldSkipFirst ? 1 : 0
+        guard startIndex < additions.count else { return }
+
+        for index in startIndex..<additions.count {
+            path.add(additions[index])
+        }
+    }
+
+    private func distanceBetween(_ start: CLLocationCoordinate2D, _ end: CLLocationCoordinate2D) -> Double {
+        CLLocation(latitude: start.latitude, longitude: start.longitude)
+            .distance(from: CLLocation(latitude: end.latitude, longitude: end.longitude))
+    }
+
+    private func sameCoordinate(_ lhs: CLLocationCoordinate2D?, _ rhs: CLLocationCoordinate2D?) -> Bool {
+        guard let lhs, let rhs else { return false }
+        return abs(lhs.latitude - rhs.latitude) < 0.0000001 && abs(lhs.longitude - rhs.longitude) < 0.0000001
+    }
+
+    private func routeOrder(_ projection: RouteProjection) -> Double {
+        Double(projection.segmentIndex) + projection.fraction
     }
 
     private func getSegmentIndexForDistance(_ distance: Double) -> Int {
@@ -291,6 +615,60 @@ class PlaybackManager: NSObject {
         let fLat = from.lat * .pi / 180.0, fLng = from.lng * .pi / 180.0, tLat = to.lat * .pi / 180.0, tLng = to.lng * .pi / 180.0
         let y = sin(tLng - fLng) * cos(tLat), x = cos(fLat) * sin(tLat) - sin(fLat) * cos(tLat) * cos(tLng - fLng)
         return (atan2(y, x) * 180.0 / .pi + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    private func computeHeading(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> Double {
+        let fLat = from.latitude * .pi / 180.0
+        let fLng = from.longitude * .pi / 180.0
+        let tLat = to.latitude * .pi / 180.0
+        let tLng = to.longitude * .pi / 180.0
+        let y = sin(tLng - fLng) * cos(tLat)
+        let x = cos(fLat) * sin(tLat) - sin(fLat) * cos(tLat) * cos(tLng - fLng)
+        return (atan2(y, x) * 180.0 / .pi + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    private func prepareVehicleIcons() {
+        let fallback = GMSMarker.markerImage(with: .cyan)
+        let normal = Convert.toIcon(playbackSettings.vehicleIcon, registrar: registrar)
+        vehicleIconNormal = normal ?? fallback
+
+        if let source = normal ?? fallback {
+            vehicleIconFlipped = flipImageHorizontally(source)
+        } else {
+            vehicleIconFlipped = vehicleIconNormal
+        }
+    }
+
+    private func flipImageHorizontally(_ image: UIImage) -> UIImage {
+        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale)
+        guard let context = UIGraphicsGetCurrentContext() else {
+            UIGraphicsEndImageContext()
+            return image
+        }
+
+        context.translateBy(x: image.size.width, y: 0)
+        context.scaleBy(x: -1, y: 1)
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+
+        let result = UIGraphicsGetImageFromCurrentImageContext() ?? image
+        UIGraphicsEndImageContext()
+        return result
+    }
+
+    private func applyVehicleAppearance(heading: Double) {
+        guard let vehicleMarker else { return }
+
+        if playbackSettings.canRotate {
+            vehicleMarker.rotation = heading
+            vehicleMarker.icon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+            return
+        }
+
+        let isGoingLeft = heading > 180.0
+        vehicleMarker.rotation = 0
+        vehicleMarker.icon = isGoingLeft
+            ? (vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan))
+            : (vehicleIconFlipped ?? vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan))
     }
 
     private func reset() {

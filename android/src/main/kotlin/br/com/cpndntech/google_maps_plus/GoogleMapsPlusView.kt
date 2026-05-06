@@ -24,6 +24,9 @@ class GoogleMapsPlusView(
     
     private var mapObjectsManager: MapObjectsManager? = null
     private var playbackManager: PlaybackManager? = null
+    private var pendingSnappedRoute: List<LatLng>? = null
+    private var pendingSnappedAnchors: List<PlaybackManager.RouteAnchor>? = null
+    private var pendingPlayRequest: Boolean = false
     
     private var mapSettings = Convert.toMapSettings(creationParams)
     private var playbackSettings = Convert.toPlaybackSettings(creationParams)
@@ -57,6 +60,24 @@ class GoogleMapsPlusView(
             } ?: emptyList()
             
             playbackManager?.setPoints(pts)
+
+            // Apply any snapped route sent before map/native playback manager was ready.
+            val route = pendingSnappedRoute
+            if (route != null) {
+                val anchors = pendingSnappedAnchors ?: emptyList()
+                playbackManager?.setSnappedRoute(route, anchors)
+                pendingSnappedRoute = null
+                pendingSnappedAnchors = null
+            }
+
+            if (pendingPlayRequest) {
+                pendingPlayRequest = false
+                playbackManager?.let {
+                    val message = it.getDebugPlaybackSummary()
+                    android.util.Log.d("GoogleMapsPlusView", "Deferred play executed. $message")
+                    it.play()
+                }
+            }
         }
 
         map.setOnCameraMoveStartedListener { reason ->
@@ -152,7 +173,22 @@ class GoogleMapsPlusView(
                 result.success(null)
             }
             // Playback specific
-            "play" -> { pManager?.play(); result.success(null) }
+            "play" -> {
+                if (pManager == null) {
+                    pendingPlayRequest = true
+                    android.util.Log.d(
+                        "GoogleMapsPlusView",
+                        "Play requested before native ready. Queued until onMapReady."
+                    )
+                } else {
+                    pManager.let {
+                        val message = it.getDebugPlaybackSummary()
+                        android.util.Log.d("GoogleMapsPlusView", message)
+                        it.play()
+                    }
+                }
+                result.success(null)
+            }
             "pause" -> { pManager?.pause(); result.success(null) }
             "resumeFromStop" -> { pManager?.resumeFromStop(); result.success(null) }
             "seek" -> { pManager?.seekTo(call.argument<Int>("index") ?: 0); result.success(null) }
@@ -160,6 +196,39 @@ class GoogleMapsPlusView(
                 val pointsData = call.argument<List<Map<String, Any>>>("points") ?: return
                 val newPoints = pointsData.map { Convert.toGoogleMapsPlaybackPoint(it) }
                 pManager?.setPoints(newPoints)
+                result.success(null)
+            }
+            "setSnappedRoute" -> {
+                val routeData = call.argument<List<Map<String, Any>>>("route") ?: return
+                val snappedRoute = routeData.map {
+                    LatLng(
+                        (it["lat"] as? Number)?.toDouble() ?: 0.0,
+                        (it["lng"] as? Number)?.toDouble() ?: 0.0
+                    )
+                }
+                val anchorData = call.argument<List<Map<String, Any>>>("anchors")
+                val anchors = anchorData?.map {
+                    PlaybackManager.RouteAnchor(
+                        point = LatLng(
+                            (it["lat"] as? Number)?.toDouble() ?: 0.0,
+                            (it["lng"] as? Number)?.toDouble() ?: 0.0
+                        ),
+                        shapeIndex = (it["shapeIndex"] as? Number)?.toInt() ?: 0,
+                        shapeFraction = (it["shapeFraction"] as? Number)?.toDouble() ?: 0.0
+                    )
+                } ?: emptyList()
+
+                if (pManager != null) {
+                    pManager.setSnappedRoute(snappedRoute, anchors)
+                } else {
+                    // Map may not be ready yet; keep payload and apply on onMapReady.
+                    pendingSnappedRoute = snappedRoute
+                    pendingSnappedAnchors = anchors
+                    android.util.Log.d(
+                        "GoogleMapsPlusView",
+                        "Queued snapped route before native ready: route=${snappedRoute.size}, anchors=${anchors.size}"
+                    )
+                }
                 result.success(null)
             }
             "setSpeed" -> { pManager?.setSpeed(call.argument<Int>("speed") ?: 1); result.success(null) }
