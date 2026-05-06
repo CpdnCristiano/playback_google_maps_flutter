@@ -127,32 +127,10 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
         
         switch call.method {
         case MethodNames.updateOptions:
-            let oldPoints = playbackSettings.points
             mapSettings = Convert.toMapSettings(args)
             playbackSettings = Convert.toPlaybackSettings(args)
-            let newPoints = playbackSettings.points
-            
-            // Verifica se os pontos realmente mudaram (conteúdo, não referência)
-            let pointsChanged: Bool
-            switch (oldPoints, newPoints) {
-            case (nil, nil):
-                pointsChanged = false
-            case (nil, _), (_, nil):
-                pointsChanged = true
-            case let (old?, new?):
-                // Compara tamanho e conteúdo como no Android
-                pointsChanged = (old.count != new.count) || ("\(old)" != "\(new)")
-            }
-            
-            // Se os pontos mudaram, reinicia o playback
-            if pointsChanged {
-                pManager?.playbackSettings = playbackSettings
-                setupMap() // Reinicia tudo incluindo setupInitialState
-            } else {
-                // Se só mudaram configurações do mapa, apenas atualiza sem resetar
-                pManager?.playbackSettings = playbackSettings
-                updateMapSettings()
-            }
+            pManager?.playbackSettings = playbackSettings
+            updateMapSettings()
             result(nil)
         case "play":
             if let pManager {

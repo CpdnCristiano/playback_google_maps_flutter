@@ -43,7 +43,6 @@ class PlaybackManager: NSObject {
         stopIcon: nil,
         drawTrail: true,
         polylineColor: nil,
-        points: nil,
         autoStart: false
     )
     
