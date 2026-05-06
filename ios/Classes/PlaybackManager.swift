@@ -68,6 +68,7 @@ class PlaybackManager: NSObject {
     private var isPausedForStop: Bool = false
     private var lastStopIndexPassed: Int = -1
     private var lastTrailIdx: Int = -1
+    private var trailPath = GMSMutablePath()
     private var maxRenderedStopIndex: Int = -1  // Controla até qual índice renderizar stops
     
     private var displayLink: CADisplayLink?
@@ -268,9 +269,17 @@ class PlaybackManager: NSObject {
         maxRenderedStopIndex = idx - 1  // Não reconstrói stops além deste índice
 
         // Inicializa polyline vazia, será preenchida em updateVehiclePosition
-        lastTrailIdx = -1
-        let emptyPath = GMSMutablePath()
-        progressPolyline?.path = emptyPath
+        trailPath = GMSMutablePath()
+        if snappedSegments.isEmpty {
+            for i in 0..<idx {
+                trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
+            }
+            lastTrailIdx = idx - 1
+            progressPolyline?.path = trailPath
+        } else {
+            lastTrailIdx = -1
+            progressPolyline?.path = trailPath
+        }
 
         updateVehiclePosition(currentGlobalDistance)  // adiciona a posição interpolada atual
         channel.invokeMethod("onProgress", arguments: ["index": Double(idx)])
@@ -296,12 +305,13 @@ class PlaybackManager: NSObject {
             pos = snappedProgress.position
         } else {
             // Fallback: interpolar entre pontos originais (Catmull-Rom)
+            let clampedT = min(max(t, 0.0), 1.0)
             let p1 = points[idx]
             let p2 = points[idx + 1]
             let p0 = idx > 0 ? points[idx - 1] : p1
             let p3 = idx + 2 < points.count ? points[idx + 2] : p2
             
-            pos = interpolateCatmullRom(p0: p0, p1: p1, p2: p2, p3: p3, t: t)
+            pos = interpolateCatmullRom(p0: p0, p1: p1, p2: p2, p3: p3, t: clampedT)
         }
         
         vehicleMarker?.position = pos
@@ -309,11 +319,12 @@ class PlaybackManager: NSObject {
         if let snappedProgress {
             heading = snappedProgress.heading
         } else if playbackSettings.dynamicRotation {
+            let clampedT = min(max(t, 0.0), 1.0)
             let p1 = points[idx]
             let p2 = points[idx + 1]
             let p0 = idx > 0 ? points[idx - 1] : p1
             let p3 = idx + 2 < points.count ? points[idx + 2] : p2
-            heading = getCatmullRomHeading(p0: p0, p1: p1, p2: p2, p3: p3, t: t)
+            heading = getCatmullRomHeading(p0: p0, p1: p1, p2: p2, p3: p3, t: clampedT)
         } else {
             heading = points[idx].bearing
         }
@@ -327,16 +338,16 @@ class PlaybackManager: NSObject {
             if let snappedProgress {
                 progressPolyline?.path = buildTrailFromSnappedRoute(currentSegmentIndex: idx, currentProgress: snappedProgress)
             } else {
-                // Reconstrói polyline completa incrementando pontos passados
-                let path = GMSMutablePath()
-                for i in 0...idx {
-                    if i < points.count {
-                        let pt = points[i]
-                        path.add(CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lng))
+                if idx > lastTrailIdx {
+                    for i in (lastTrailIdx + 1)...idx {
+                        if i < points.count {
+                            let pt = points[i]
+                            trailPath.add(CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lng))
+                        }
                     }
+                    lastTrailIdx = idx
                 }
-                progressPolyline?.path = path
-                lastTrailIdx = idx
+                progressPolyline?.path = trailPath
             }
         }
         
@@ -732,6 +743,7 @@ class PlaybackManager: NSObject {
         isPausedForStop = false
         lastStopIndexPassed = -1
         lastTrailIdx = -1
+        trailPath = GMSMutablePath()
         maxRenderedStopIndex = -1
         vehicleMarker?.map = nil
         vehicleMarker = nil
