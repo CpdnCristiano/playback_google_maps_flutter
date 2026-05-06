@@ -18,6 +18,9 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
     private var playbackSettings: PlaybackSettings
     
     private var followTimer: Timer? = nil
+    private var userInteractionTimer: Timer? = nil
+    private var lastCameraPosition: GMSCameraPosition? = nil
+    private var isUserInteracting: Bool = false
     private let isPlaybackMode: Bool
 
     init(
@@ -297,17 +300,33 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
     
     public func mapView(_ mapView: GMSMapView, willMove gesture: Bool) {
         if gesture {
+            isUserInteracting = true
             playbackManager?.followEnabled = false
             mapObjectsManager?.followEnabled = false
+            userInteractionTimer?.invalidate()
             followTimer?.invalidate()
         }
     }
     
+    public func mapView(_ mapView: GMSMapView, didChangeCameraPosition position: GMSCameraPosition) {
+        // Detectar se a câmera está se movendo (pode ser usuário ou playback)
+        if isUserInteracting {
+            // Usuário ainda está interagindo
+            userInteractionTimer?.invalidate()
+            userInteractionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+                // 500ms sem nova mudança de câmera = usuário parou
+                self?.isUserInteracting = false
+                self?.playbackManager?.followEnabled = true
+                self?.mapObjectsManager?.followEnabled = true
+            }
+        }
+    }
+    
     public func mapView(_ mapView: GMSMapView, idleAt position: GMSCameraPosition) {
-        followTimer?.invalidate()
-        followTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-            self.playbackManager?.followEnabled = true
-            self.mapObjectsManager?.followEnabled = true
+        // Backup: se didChangeCameraPosition não funcionar bem, idleAt também reabilita follow
+        if !isUserInteracting {
+            playbackManager?.followEnabled = true
+            mapObjectsManager?.followEnabled = true
         }
         channel.invokeMethod("onCameraIdle", arguments: nil)
     }
