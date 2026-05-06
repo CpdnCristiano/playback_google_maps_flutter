@@ -34,6 +34,7 @@ class PlaybackManager(
     private var lastTrailIdx = -1
     private val trailPoints = mutableListOf<LatLng>()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var maxRenderedStopIndex = -1  // Controla até qual índice renderizar stops
 
     var followEnabled = true
 
@@ -41,6 +42,7 @@ class PlaybackManager(
         this.points = newPoints
         calculateDistances()
         reset()
+        setupInitialState()  // Reconstrói o estado inicial com novos pontos
     }
 
     private fun calculateDistances() {
@@ -126,16 +128,13 @@ class PlaybackManager(
 
     private fun pauseForStop(index: Int) {
         isPausedForStop = true
-        playbackAnimator?.pause()
+        // Notifica apenas que chegou no stop, mas não pausa nem avisa pausa
         channel.invokeMethod("onStopReached", mapOf("index" to index))
-        channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "stopped"))
-
         val delayMs = (2000L / playbackSpeed)
         mainHandler.postDelayed({
             if (isPausedForStop) {
                 isPausedForStop = false
-                playbackAnimator?.resume()
-                channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "playing"))
+                // Continua silenciosamente — nenhuma notificação
             }
         }, delayMs)
     }
@@ -154,6 +153,14 @@ class PlaybackManager(
         val safeIndex = index.coerceIn(0, points.size - 1)
         currentGlobalDistance = cumulativeDistances[safeIndex]
         lastStopIndexPassed = safeIndex - 1  // permite que o stop nesse índice dispare a pausa ao retomar
+
+        // Remove marcadores de parada que estão além do índice buscado
+        val keysToRemove = stopMarkers.keys.filter { it >= safeIndex }
+        keysToRemove.forEach { key ->
+            stopMarkers[key]?.remove()
+            stopMarkers.remove(key)
+        }
+        maxRenderedStopIndex = safeIndex - 1  // Não reconstrói stops além deste índice
 
         // Reconstrói a trilha até a posição buscada
         trailPoints.clear()
@@ -209,7 +216,12 @@ class PlaybackManager(
         }
         
         if (playbackSettings.showStops) {
-            for (i in 0..idx) {
+            // Atualiza o máximo índice rendizado conforme avança
+            if (idx > maxRenderedStopIndex) {
+                maxRenderedStopIndex = idx
+            }
+            // Só reconstrói stops até maxRenderedStopIndex
+            for (i in 0..maxRenderedStopIndex) {
                 if (points[i].isStop) {
                     checkAndAddStop(i)
                 }
@@ -253,6 +265,7 @@ class PlaybackManager(
         isPausedForStop = false
         lastStopIndexPassed = -1
         lastTrailIdx = -1
+        maxRenderedStopIndex = -1
         trailPoints.clear()
         vehicleMarker?.remove()
         vehicleMarker = null

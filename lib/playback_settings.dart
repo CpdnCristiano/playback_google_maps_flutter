@@ -9,7 +9,6 @@ class _PlaybackSettings {
   final Object? stopIcon;
   final bool drawTrail;
   final int? polylineColor;
-  final List<dynamic>? points;
   final bool autoStart;
 
   _PlaybackSettings({
@@ -21,7 +20,6 @@ class _PlaybackSettings {
     this.stopIcon,
     this.drawTrail = true,
     this.polylineColor,
-    this.points,
     this.autoStart = false,
   });
 
@@ -35,7 +33,6 @@ class _PlaybackSettings {
       'stopIcon': stopIcon,
       'drawTrail': drawTrail,
       'polylineColor': polylineColor,
-      'points': points,
       'autoStart': autoStart,
     };
   }

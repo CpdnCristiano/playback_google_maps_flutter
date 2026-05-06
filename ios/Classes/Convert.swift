@@ -43,7 +43,6 @@ struct PlaybackSettings {
     let stopIcon: Any?
     let drawTrail: Bool
     let polylineColor: Any?
-    let points: [[String: Any]]?
     let autoStart: Bool
 }
 
@@ -88,8 +87,16 @@ class Convert {
             stopIcon: m["stopIcon"],
             drawTrail: m.getBool("drawTrail", true),
             polylineColor: m["polylineColor"],
-            points: m.getList("points"),
             autoStart: m.getBool("autoStart", false)
+        )
+    }
+
+    static func toGoogleMapsPlaybackPoint(_ data: [String: Any]) -> GoogleMapsPlaybackPoint {
+        return GoogleMapsPlaybackPoint(
+            lat: data["lat"] as? Double ?? 0.0,
+            lng: data["lng"] as? Double ?? 0.0,
+            bearing: data["bearing"] as? Double ?? 0.0,
+            isStop: data["isStop"] as? Bool ?? false
         )
     }
 

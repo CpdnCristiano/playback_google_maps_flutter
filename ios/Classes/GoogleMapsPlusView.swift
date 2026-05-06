@@ -60,27 +60,16 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
             polygons: mapSettings.initialPolygons
         )
         
-        if isPlaybackMode || playbackSettings.points != nil {
+        if isPlaybackMode {
             if playbackManager == nil { playbackManager = PlaybackManager(mapView: mapView, channel: channel, registrar: registrar) }
             guard let pManager = playbackManager else { return }
             pManager.playbackSettings = playbackSettings
             
-            if let ptsData = playbackSettings.points {
-                let pts = ptsData.map {
-                    GoogleMapsPlaybackPoint(
-                        lat: $0["lat"] as? Double ?? 0.0,
-                        lng: $0["lng"] as? Double ?? 0.0,
-                        bearing: $0["bearing"] as? Double ?? 0.0,
-                        isStop: $0["isStop"] as? Bool ?? false
-                    )
-                }
+            if let ptsData = creationParams?["points"] as? [[String: Any]] {
+                let pts = ptsData.map { Convert.toGoogleMapsPlaybackPoint($0) }
                 pManager.setPoints(pts)
             }
             pManager.setupInitialState()
-        } else {
-            let initialCamera = (Convert.toMapSettings(nil)).initialMarkers // dummy call just to get structure if needed
-            // Use creationParams equivalent if available
-            // In setupMap we usually move to initial camera if not in playback
         }
     }
     
@@ -149,6 +138,12 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
         case "pause": pManager?.pause(); result(nil)
         case "resumeFromStop": pManager?.resumeFromStop(); result(nil)
         case "seek": pManager?.seekTo(args?["index"] as? Int ?? 0); result(nil)
+        case "updatePoints":
+            if let pointsData = args?["points"] as? [[String: Any]] {
+                let newPoints = pointsData.map { Convert.toGoogleMapsPlaybackPoint($0) }
+                pManager?.setPoints(newPoints)
+            }
+            result(nil)
         case "setSpeed": pManager?.setSpeed(args?["speed"] as? Int ?? 1); result(nil)
         case MethodNames.markersUpdate: manager?.applyMarkerUpdates(Convert.toMarkerUpdates(call.arguments)); result(nil)
         case MethodNames.polylinesUpdate: manager?.applyPolylineUpdates(Convert.toPolylineUpdates(call.arguments)); result(nil)

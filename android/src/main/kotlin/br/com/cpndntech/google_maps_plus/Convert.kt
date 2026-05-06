@@ -47,7 +47,6 @@ data class PlaybackSettings(
     val stopIcon: Any? = null,
     val drawTrail: Boolean = true,
     val polylineColor: Any? = null,
-    val points: List<Map<String, Any>>? = null,
     val autoStart: Boolean = false
 )
 
@@ -97,8 +96,16 @@ object Convert {
             stopIcon = m["stopIcon"],
             drawTrail = m.getBool("drawTrail", true),
             polylineColor = m["polylineColor"],
-            points = m.getList("points"),
             autoStart = m.getBool("autoStart", false)
+        )
+    }
+
+    fun toGoogleMapsPlaybackPoint(data: Map<String, Any>): GoogleMapsPlaybackPoint {
+        return GoogleMapsPlaybackPoint(
+            lat = (data["lat"] as? Number)?.toDouble() ?: 0.0,
+            lng = (data["lng"] as? Number)?.toDouble() ?: 0.0,
+            bearing = (data["bearing"] as? Number)?.toDouble() ?: 0.0,
+            isStop = data["isStop"] as? Boolean == true
         )
     }
 

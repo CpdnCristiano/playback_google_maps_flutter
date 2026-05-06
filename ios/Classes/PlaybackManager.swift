@@ -35,6 +35,7 @@ class PlaybackManager: NSObject {
     private var lastStopIndexPassed: Int = -1
     private var lastTrailIdx: Int = -1
     private var trailPath = GMSMutablePath()
+    private var maxRenderedStopIndex: Int = -1  // Controla até qual índice renderizar stops
     
     private var displayLink: CADisplayLink?
     private var startTime: CFTimeInterval = 0
@@ -52,6 +53,7 @@ class PlaybackManager: NSObject {
         self.points = newPoints
         calculateDistances()
         reset()
+        setupInitialState()  // Reconstrói o estado inicial com novos pontos
     }
 
     private func calculateDistances() {
@@ -151,15 +153,14 @@ class PlaybackManager: NSObject {
 
     private func pauseForStop(_ index: Int) {
         isPausedForStop = true
+        // Notifica apenas que chegou no stop, mas não pausa nem avisa pausa
         channel.invokeMethod("onStopReached", arguments: ["index": index])
-        channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "stopped"])
 
         let delay = 2.0 / Double(playbackSpeed)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self = self, self.isPausedForStop else { return }
             self.isPausedForStop = false
-            self.startAnimation()
-            self.channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "playing"])
+            // Continua silenciosamente — nenhuma notificação
         }
     }
 
@@ -181,6 +182,14 @@ class PlaybackManager: NSObject {
         let idx = index.clamped(to: 0...(points.count - 1))
         currentGlobalDistance = cumulativeDistances[idx]
         lastStopIndexPassed = idx - 1  // permite que o stop nesse índice dispare pausa ao retomar
+
+        // Remove marcadores de parada que estão além do índice buscado
+        let keysToRemove = stopMarkers.keys.filter { $0 >= idx }
+        for key in keysToRemove {
+            stopMarkers[key]?.map = nil
+            stopMarkers.removeValue(forKey: key)
+        }
+        maxRenderedStopIndex = idx - 1  // Não reconstrói stops além deste índice
 
         // Reconstrói a trilha com os waypoints anteriores ao índice buscado
         trailPath = GMSMutablePath()
@@ -236,7 +245,12 @@ class PlaybackManager: NSObject {
         }
         
         if playbackSettings.showStops {
-            for i in 0...idx {
+            // Atualiza o máximo índice rendizado conforme avança
+            if idx > maxRenderedStopIndex {
+                maxRenderedStopIndex = idx
+            }
+            // Só reconstrói stops até maxRenderedStopIndex
+            for i in 0...maxRenderedStopIndex {
                 if points[i].isStop {
                     checkAndAddStop(i)
                 }
@@ -286,6 +300,7 @@ class PlaybackManager: NSObject {
         isPausedForStop = false
         lastStopIndexPassed = -1
         lastTrailIdx = -1
+        maxRenderedStopIndex = -1
         trailPath = GMSMutablePath()
         vehicleMarker?.map = nil
         vehicleMarker = nil

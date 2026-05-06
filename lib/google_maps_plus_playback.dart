@@ -214,7 +214,6 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
       drawTrail: drawTrail,
       autoStart: autoStart,
       polylineColor: polylineColor.toARGB32(),
-      points: points.map((p) => p.toJson()).toList(),
     );
   }
 
@@ -234,6 +233,22 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
     // que vai aplicar tudo do widget.polygons, widget.markers, etc
     if (_channel == null) {
       return;
+    }
+
+    // Verifica se os pontos realmente mudaram (tamanho ou conteúdo)
+    final pointsChanged =
+        widget.points.length != oldWidget.points.length ||
+        widget.points.asMap().entries.any(
+          (e) =>
+              e.value.lat != oldWidget.points[e.key].lat ||
+              e.value.lng != oldWidget.points[e.key].lng ||
+              e.value.bearing != oldWidget.points[e.key].bearing ||
+              e.value.isStop != oldWidget.points[e.key].isStop,
+        );
+
+    // Se os pontos mudaram, atualiza
+    if (pointsChanged) {
+      _controller?.updatePoints(widget.points);
     }
 
     _updateObjectsIfNeeded(oldWidget);
@@ -474,6 +489,7 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
       creationParams['initialCameraPosition'] = widget.initialCameraPosition!
           .toMap();
     }
+    creationParams['points'] = widget.points.map((p) => p.toJson()).toList();
     creationParams['markers'] = widget.markers.map((e) => e.toJson()).toList();
     creationParams['circles'] = widget.circles.map((e) => e.toJson()).toList();
     creationParams['polylines'] = widget.polylines
@@ -550,6 +566,13 @@ class GoogleMapsPlusPlaybackController extends GoogleMapsPlusController {
   /// Seeks to a specific point in the list.
   Future<void> seek(int index) async {
     await channel.invokeMethod('seek', {'index': index});
+  }
+
+  /// Updates the playback points. Call this when the route changes.
+  Future<void> updatePoints(List<GoogleMapsPlaybackPoint> points) async {
+    await channel.invokeMethod('updatePoints', {
+      'points': points.map((p) => p.toJson()).toList(),
+    });
   }
 
   /// Gets the estimated exact duration of the animation.

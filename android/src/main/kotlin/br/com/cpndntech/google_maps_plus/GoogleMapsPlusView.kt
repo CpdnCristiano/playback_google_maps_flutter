@@ -48,17 +48,12 @@ class GoogleMapsPlusView(
         val density = context.resources.displayMetrics.density
         mapObjectsManager = MapObjectsManager(map, density)
         
-        if (isPlaybackMode || playbackSettings.points != null) {
+        if (isPlaybackMode) {
             playbackManager = PlaybackManager(map, channel, density)
             playbackManager?.playbackSettings = playbackSettings
             
             val pts = (creationParams?.get("points") as? List<Map<String, Any>>)?.map {
-                GoogleMapsPlaybackPoint(
-                    lat = (it["lat"] as? Number)?.toDouble() ?: 0.0,
-                    lng = (it["lng"] as? Number)?.toDouble() ?: 0.0,
-                    bearing = (it["bearing"] as? Number)?.toDouble() ?: 0.0,
-                    isStop = it["isStop"] as? Boolean == true
-                )
+                Convert.toGoogleMapsPlaybackPoint(it)
             } ?: emptyList()
             
             playbackManager?.setPoints(pts)
@@ -110,7 +105,7 @@ class GoogleMapsPlusView(
             mapSettings.initialPolygons
         )
 
-        if (isPlaybackMode || playbackSettings.points != null) {
+        if (isPlaybackMode) {
             playbackManager?.setupInitialState()
         } else {
             val initialCamera = creationParams?.get("initialCameraPosition") as? Map<String, Any>
@@ -149,28 +144,11 @@ class GoogleMapsPlusView(
         
         when (call.method) {
             MethodNames.UPDATE_OPTIONS -> {
-                val oldPoints = playbackSettings.points
                 mapSettings = Convert.toMapSettings(call.arguments)
                 playbackSettings = Convert.toPlaybackSettings(call.arguments)
-                val newPoints = playbackSettings.points
                 
-                // Verifica se os pontos realmente mudaram (conteúdo, não referência)
-                val pointsChanged = when {
-                    oldPoints == null && newPoints == null -> false
-                    oldPoints == null || newPoints == null -> true
-                    oldPoints.size != newPoints.size -> true
-                    else -> oldPoints.toString() != newPoints.toString()
-                }
-                
-                // Se os pontos mudaram, reinicia o playback
-                if (pointsChanged) {
-                    pManager?.playbackSettings = playbackSettings
-                    setupMap() // Reinicia tudo incluindo setupInitialState
-                } else {
-                    // Se só mudaram configurações do mapa, apenas atualiza sem resetar
-                    pManager?.playbackSettings = playbackSettings
-                    updateMapSettings()
-                }
+                pManager?.playbackSettings = playbackSettings
+                updateMapSettings()
                 result.success(null)
             }
             // Playback specific
@@ -178,6 +156,12 @@ class GoogleMapsPlusView(
             "pause" -> { pManager?.pause(); result.success(null) }
             "resumeFromStop" -> { pManager?.resumeFromStop(); result.success(null) }
             "seek" -> { pManager?.seekTo(call.argument<Int>("index") ?: 0); result.success(null) }
+            "updatePoints" -> {
+                val pointsData = call.argument<List<Map<String, Any>>>("points") ?: return
+                val newPoints = pointsData.map { Convert.toGoogleMapsPlaybackPoint(it) }
+                pManager?.setPoints(newPoints)
+                result.success(null)
+            }
             "setSpeed" -> { pManager?.setSpeed(call.argument<Int>("speed") ?: 1); result.success(null) }
             
             // Map common
