@@ -256,7 +256,7 @@ class PlaybackManager: NSObject {
         progressPolyline?.path = emptyPath
 
         updateVehiclePosition(currentGlobalDistance)  // adiciona a posição interpolada atual
-        channel.invokeMethod("onProgress", arguments: ["index": Double(idx))]
+        channel.invokeMethod("onProgress", arguments: ["index": Double(idx)])
     }
 
     func setSpeed(_ speed: Int) {
