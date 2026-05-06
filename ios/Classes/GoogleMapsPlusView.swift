@@ -308,7 +308,7 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
         }
     }
     
-    public func mapView(_ mapView: GMSMapView, didChangeCameraPosition position: GMSCameraPosition) {
+    public func mapView(_ mapView: GMSMapView, didChange position: GMSCameraPosition) {
         // Detectar se a câmera está se movendo (pode ser usuário ou playback)
         if isUserInteracting {
             // Usuário ainda está interagindo
@@ -323,7 +323,7 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
     }
     
     public func mapView(_ mapView: GMSMapView, idleAt position: GMSCameraPosition) {
-        // Backup: se didChangeCameraPosition não funcionar bem, idleAt também reabilita follow
+        // Backup: se didChange não funcionar bem, idleAt também reabilita follow
         if !isUserInteracting {
             playbackManager?.followEnabled = true
             mapObjectsManager?.followEnabled = true
