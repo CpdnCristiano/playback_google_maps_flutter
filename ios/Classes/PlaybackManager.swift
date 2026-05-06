@@ -14,6 +14,7 @@ class PlaybackManager: NSObject {
         let points: [CLLocationCoordinate2D]
         let cumulativeDistances: [Double]
         let totalDistance: Double
+        let fallback: Bool
     }
 
     private struct SnappedProgress {
@@ -50,8 +51,11 @@ class PlaybackManager: NSObject {
     private var snappedRoute: [CLLocationCoordinate2D] = []  // Rota completa da Valhalla
     private var routeAnchors: [RouteAnchor] = []
     private var snappedSegments: [SnappedSegment] = []
+    private var snappedFallbackCount: Int = 0
     private var cumulativeDistances: [Double] = []
     private var totalDistance: Double = 0.0
+    private let maxAnchorDistanceMeters: Double = 80.0
+    private let maxLengthRatio: Double = 8.0
     
     private var vehicleMarker: GMSMarker?
     private var vehicleIconNormal: UIImage?
@@ -93,6 +97,11 @@ class PlaybackManager: NSObject {
         self.routeAnchors = anchors
         buildSnappedSegments()
         NSLog("PlaybackManager: Snapped route set with \(newSnappedRoute.count) points")
+    }
+
+    func getDebugPlaybackSummary() -> String {
+        let validSegments = max(0, snappedSegments.count - snappedFallbackCount)
+        return "Play: orig=\(points.count), snapped=\(snappedRoute.count), anchors=\(routeAnchors.count), seg=\(snappedSegments.count), ok=\(validSegments), fallback=\(snappedFallbackCount)"
     }
 
     private func calculateDistances() {
@@ -341,10 +350,12 @@ class PlaybackManager: NSObject {
     private func buildSnappedSegments() {
         guard points.count >= 2, snappedRoute.count >= 2 else {
             snappedSegments = []
+            snappedFallbackCount = 0
             return
         }
 
         var segments: [SnappedSegment] = []
+        var fallbackCount = 0
         if routeAnchors.count == points.count {
             for i in 0..<(points.count - 1) {
                 let startProjection = anchorToProjection(routeAnchors[i])
@@ -353,9 +364,12 @@ class PlaybackManager: NSObject {
                     ? startProjection
                     : endProjection
                 let segmentPoints = buildSegmentPoints(from: startProjection, to: safeEndProjection)
-                segments.append(createSnappedSegment(segmentPoints))
+                let result = createSnappedSegment(originalSegmentIndex: i, segmentPoints: segmentPoints)
+                if result.fallback { fallbackCount += 1 }
+                segments.append(result)
             }
             snappedSegments = segments
+            snappedFallbackCount = fallbackCount
             return
         }
 
@@ -380,11 +394,14 @@ class PlaybackManager: NSObject {
             }
 
             let segmentPoints = buildSegmentPoints(from: startProjection, to: endProjection)
-            segments.append(createSnappedSegment(segmentPoints))
+            let result = createSnappedSegment(originalSegmentIndex: i, segmentPoints: segmentPoints)
+            if result.fallback { fallbackCount += 1 }
+            segments.append(result)
             previousProjection = endProjection
         }
 
         snappedSegments = segments
+        snappedFallbackCount = fallbackCount
     }
 
     private func anchorToProjection(_ anchor: RouteAnchor) -> RouteProjection {
@@ -420,9 +437,12 @@ class PlaybackManager: NSObject {
         return segmentPoints
     }
 
-    private func createSnappedSegment(_ segmentPoints: [CLLocationCoordinate2D]) -> SnappedSegment {
+    private func createSnappedSegment(
+        originalSegmentIndex: Int,
+        segmentPoints: [CLLocationCoordinate2D]
+    ) -> SnappedSegment {
         guard !segmentPoints.isEmpty else {
-            return SnappedSegment(points: [], cumulativeDistances: [0.0], totalDistance: 0.0)
+            return buildFallbackSegment(originalSegmentIndex: originalSegmentIndex)
         }
 
         var cumulativeDistances: [Double] = [0.0]
@@ -433,7 +453,38 @@ class PlaybackManager: NSObject {
             cumulativeDistances.append(totalDistance)
         }
 
-        return SnappedSegment(points: segmentPoints, cumulativeDistances: cumulativeDistances, totalDistance: totalDistance)
+        let startOriginal = CLLocationCoordinate2D(latitude: points[originalSegmentIndex].lat, longitude: points[originalSegmentIndex].lng)
+        let endOriginal = CLLocationCoordinate2D(latitude: points[originalSegmentIndex + 1].lat, longitude: points[originalSegmentIndex + 1].lng)
+        let directDistance = distanceBetween(startOriginal, endOriginal)
+        let startDistance = distanceBetween(segmentPoints.first ?? startOriginal, startOriginal)
+        let endDistance = distanceBetween(segmentPoints.last ?? endOriginal, endOriginal)
+        let lengthRatio = directDistance > 0 ? totalDistance / directDistance : 1.0
+        let shouldFallback = startDistance > maxAnchorDistanceMeters ||
+            endDistance > maxAnchorDistanceMeters ||
+            lengthRatio > maxLengthRatio
+
+        if shouldFallback {
+            return buildFallbackSegment(originalSegmentIndex: originalSegmentIndex)
+        }
+
+        return SnappedSegment(
+            points: segmentPoints,
+            cumulativeDistances: cumulativeDistances,
+            totalDistance: totalDistance,
+            fallback: false
+        )
+    }
+
+    private func buildFallbackSegment(originalSegmentIndex: Int) -> SnappedSegment {
+        let start = CLLocationCoordinate2D(latitude: points[originalSegmentIndex].lat, longitude: points[originalSegmentIndex].lng)
+        let end = CLLocationCoordinate2D(latitude: points[originalSegmentIndex + 1].lat, longitude: points[originalSegmentIndex + 1].lng)
+        let total = distanceBetween(start, end)
+        return SnappedSegment(
+            points: [start, end],
+            cumulativeDistances: [0.0, total],
+            totalDistance: total,
+            fallback: true
+        )
     }
 
     private func findProjectionOnSnappedRoute(

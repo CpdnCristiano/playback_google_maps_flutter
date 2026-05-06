@@ -6,9 +6,13 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
     private let mapView: GMSMapView
     private let channel: FlutterMethodChannel
     private let registrar: FlutterPluginRegistrar
+    private let creationParams: [String: Any]?
     
     private var mapObjectsManager: MapObjectsManager?
     private var playbackManager: PlaybackManager?
+    private var pendingSnappedRoute: [CLLocationCoordinate2D]? = nil
+    private var pendingSnappedAnchors: [PlaybackManager.RouteAnchor]? = nil
+    private var pendingPlayRequest: Bool = false
     
     private var mapSettings: MapSettings
     private var playbackSettings: PlaybackSettings
@@ -30,6 +34,7 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
             name: "br.com.cpndntech.google_maps_plus/map_\(viewId)",
             binaryMessenger: registrar.messenger()
         )
+        self.creationParams = args as? [String: Any]
         self.mapSettings = Convert.toMapSettings(args)
         self.playbackSettings = Convert.toPlaybackSettings(args)
         
@@ -69,7 +74,22 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
                 let pts = ptsData.map { Convert.toGoogleMapsPlaybackPoint($0) }
                 pManager.setPoints(pts)
             }
+
+            if let route = pendingSnappedRoute {
+                let anchors = pendingSnappedAnchors ?? []
+                pManager.setSnappedRoute(route, anchors: anchors)
+                pendingSnappedRoute = nil
+                pendingSnappedAnchors = nil
+            }
+
             pManager.setupInitialState()
+
+            if pendingPlayRequest {
+                pendingPlayRequest = false
+                let message = pManager.getDebugPlaybackSummary()
+                NSLog("GoogleMapsPlusView: Deferred play executed. \(message)")
+                pManager.play()
+            }
         }
     }
     
@@ -134,7 +154,16 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
                 updateMapSettings()
             }
             result(nil)
-        case "play": pManager?.play(); result(nil)
+        case "play":
+            if let pManager {
+                let message = pManager.getDebugPlaybackSummary()
+                NSLog("GoogleMapsPlusView: \(message)")
+                pManager.play()
+            } else {
+                pendingPlayRequest = true
+                NSLog("GoogleMapsPlusView: Play requested before native ready. Queued until setupMap.")
+            }
+            result(nil)
         case "pause": pManager?.pause(); result(nil)
         case "resumeFromStop": pManager?.resumeFromStop(); result(nil)
         case "seek": pManager?.seekTo(args?["index"] as? Int ?? 0); result(nil)
@@ -162,7 +191,13 @@ public class GoogleMapsPlusView: NSObject, FlutterPlatformView, GMSMapViewDelega
                         shapeFraction: $0["shapeFraction"] as? Double ?? 0.0
                     )
                 }
-                pManager?.setSnappedRoute(snappedRoute, anchors: anchors)
+                if let pManager {
+                    pManager.setSnappedRoute(snappedRoute, anchors: anchors)
+                } else {
+                    pendingSnappedRoute = snappedRoute
+                    pendingSnappedAnchors = anchors
+                    NSLog("GoogleMapsPlusView: Queued snapped route before native ready: route=\(snappedRoute.count), anchors=\(anchors.count)")
+                }
             }
             result(nil)
         case "setSpeed": pManager?.setSpeed(args?["speed"] as? Int ?? 1); result(nil)
