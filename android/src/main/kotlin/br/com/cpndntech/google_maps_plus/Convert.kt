@@ -47,7 +47,8 @@ data class PlaybackSettings(
     val stopIcon: Any? = null,
     val drawTrail: Boolean = true,
     val polylineColor: Any? = null,
-    val autoStart: Boolean = false
+    val autoStart: Boolean = false,
+    val useSnappedRoute: Boolean = true
 )
 
 // --- Utilitários de Conversão ---
@@ -96,7 +97,8 @@ object Convert {
             stopIcon = m["stopIcon"],
             drawTrail = m.getBool("drawTrail", true),
             polylineColor = m["polylineColor"],
-            autoStart = m.getBool("autoStart", false)
+            autoStart = m.getBool("autoStart", false),
+            useSnappedRoute = m.getBool("useSnappedRoute", true)
         )
     }
 

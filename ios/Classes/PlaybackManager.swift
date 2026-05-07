@@ -305,7 +305,7 @@ class PlaybackManager: NSObject {
         let idx = getSegmentIndexForDistance(distance)
         let segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
         let t = segmentDist > 0 ? (distance - cumulativeDistances[idx]) / segmentDist : 0.0
-        let snappedProgress = getProgressOnSnappedSegment(idx, segmentT: t)
+        let snappedProgress = playbackSettings.useSnappedRoute ? getProgressOnSnappedSegment(idx, segmentT: t) : nil
         
         let pos: CLLocationCoordinate2D
         if let snappedProgress {

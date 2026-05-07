@@ -10,6 +10,7 @@ class _PlaybackSettings {
   final bool drawTrail;
   final int? polylineColor;
   final bool autoStart;
+  final bool useSnappedRoute;
 
   _PlaybackSettings({
     this.baseSpeed = 60.0,
@@ -21,6 +22,7 @@ class _PlaybackSettings {
     this.drawTrail = true,
     this.polylineColor,
     this.autoStart = false,
+    this.useSnappedRoute = true,
   });
 
   Map<String, dynamic> toJson() {
@@ -34,6 +36,7 @@ class _PlaybackSettings {
       'drawTrail': drawTrail,
       'polylineColor': polylineColor,
       'autoStart': autoStart,
+      'useSnappedRoute': useSnappedRoute,
     };
   }
 }

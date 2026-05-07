@@ -44,6 +44,7 @@ struct PlaybackSettings {
     let drawTrail: Bool
     let polylineColor: Any?
     let autoStart: Bool
+    let useSnappedRoute: Bool
 }
 
 // --- Conversor ---
@@ -87,7 +88,8 @@ class Convert {
             stopIcon: m["stopIcon"],
             drawTrail: m.getBool("drawTrail", true),
             polylineColor: m["polylineColor"],
-            autoStart: m.getBool("autoStart", false)
+            autoStart: m.getBool("autoStart", false),
+            useSnappedRoute: m.getBool("useSnappedRoute", true)
         )
     }
 

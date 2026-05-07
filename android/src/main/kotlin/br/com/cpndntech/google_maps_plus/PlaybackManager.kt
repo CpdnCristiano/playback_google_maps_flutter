@@ -259,9 +259,9 @@ class PlaybackManager(
         val idx = getSegmentIndexForDistance(distance)
         val segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
         val t = if (segmentDist > 0) ((distance - cumulativeDistances[idx]) / segmentDist) else 0.0
-        val snappedProgress = getProgressOnSnappedSegment(idx, t)
+        val snappedProgress = if (playbackSettings.useSnappedRoute) getProgressOnSnappedSegment(idx, t) else null
         
-        // O veículo segue o subtrecho snapped correspondente ao trecho original A -> B.
+        // O veículo segue o subtrecho snapped correspondente ao trecho original A -> B (se habilitado).
         val pos = if (snappedProgress != null) {
             snappedProgress.position
         } else {
