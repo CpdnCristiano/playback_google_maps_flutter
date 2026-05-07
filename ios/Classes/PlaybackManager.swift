@@ -43,7 +43,8 @@ class PlaybackManager: NSObject {
         stopIcon: nil,
         drawTrail: true,
         polylineColor: nil,
-        autoStart: false
+        autoStart: false,
+        useSnappedRoute: false
     )
     
     private var points: [GoogleMapsPlaybackPoint] = []
