@@ -262,7 +262,9 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
   }
 
   Future<void> _prepareSnappedRouteForRender() async {
-    if (!widget.deferNativeUntilSnappedRoute || widget.points.length < 2) {
+    if (!widget.useSnappedRoute ||
+        !widget.deferNativeUntilSnappedRoute ||
+        widget.points.length < 2) {
       if (mounted) {
         setState(() {
           _isPreparingSnappedRoute = false;
@@ -318,7 +320,9 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
 
   Future<void> _syncSnappedRouteFromPoints() async {
     final controller = _controller;
-    if (controller == null || widget.points.length < 2) {
+    if (!widget.useSnappedRoute ||
+        controller == null ||
+        widget.points.length < 2) {
       return;
     }
 
@@ -351,6 +355,7 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
     final pointsChanged = _didPointsChange(oldWidget.points, widget.points);
 
     if (pointsChanged ||
+      oldWidget.useSnappedRoute != widget.useSnappedRoute ||
         oldWidget.deferNativeUntilSnappedRoute !=
             widget.deferNativeUntilSnappedRoute) {
       _prepareSnappedRouteForRender();
@@ -365,7 +370,7 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
     // Se os pontos mudaram, atualiza
     if (pointsChanged) {
       _controller?.updatePoints(widget.points);
-      if (!widget.deferNativeUntilSnappedRoute) {
+      if (widget.useSnappedRoute && !widget.deferNativeUntilSnappedRoute) {
         _syncSnappedRouteFromPoints();
       }
     }
@@ -567,12 +572,12 @@ class _GoogleMapsPlusPlaybackState extends State<GoogleMapsPlusPlayback> {
       'polygons': widget.polygons.map((e) => e.toJson()).toList(),
     });
 
-    if (_pendingRouteData != null) {
+    if (widget.useSnappedRoute && _pendingRouteData != null) {
       _controller!.setSnappedRouteData(_pendingRouteData!);
       debugPrint(
         'GoogleMapsPlusPlayback: applying cached snapped route (route=${_pendingRouteData!.route.length}, anchors=${_pendingRouteData!.anchors.length})',
       );
-    } else if (!widget.deferNativeUntilSnappedRoute) {
+    } else if (widget.useSnappedRoute && !widget.deferNativeUntilSnappedRoute) {
       _syncSnappedRouteFromPoints();
     }
 

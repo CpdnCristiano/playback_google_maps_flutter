@@ -301,14 +301,28 @@ class PlaybackManager(
             if (snappedProgress != null) {
                 progressPolyline?.points = buildTrailFromSnappedRoute(idx, snappedProgress)
             } else {
+                if (trailPoints.isEmpty() && points.isNotEmpty()) {
+                    trailPoints.add(LatLng(points[0].lat, points[0].lng))
+                }
                 if (idx > lastTrailIdx) {
                     for (i in (lastTrailIdx + 1)..idx) {
                         if (i < points.size) {
-                            trailPoints.add(LatLng(points[i].lat, points[i].lng))
+                            val routePoint = LatLng(points[i].lat, points[i].lng)
+                            if (trailPoints.lastOrNull()?.let { !sameCoordinate(it, routePoint) } != false) {
+                                trailPoints.add(routePoint)
+                            }
                         }
                     }
                     lastTrailIdx = idx
                 }
+
+                val lastTrailPoint = trailPoints.lastOrNull()
+                if (lastTrailPoint == null ||
+                    (!sameCoordinate(lastTrailPoint, pos) && distanceBetween(lastTrailPoint, pos) >= 1.0)
+                ) {
+                    trailPoints.add(pos)
+                }
+
                 progressPolyline?.points = trailPoints.toList()
             }
         }

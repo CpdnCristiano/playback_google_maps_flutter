@@ -345,15 +345,32 @@ class PlaybackManager: NSObject {
             if let snappedProgress {
                 progressPolyline?.path = buildTrailFromSnappedRoute(currentSegmentIndex: idx, currentProgress: snappedProgress)
             } else {
+                if trailPath.count() == 0, let first = points.first {
+                    trailPath.add(CLLocationCoordinate2D(latitude: first.lat, longitude: first.lng))
+                }
+
                 if idx > lastTrailIdx {
                     for i in (lastTrailIdx + 1)...idx {
                         if i < points.count {
                             let pt = points[i]
-                            trailPath.add(CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lng))
+                            let routePoint = CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lng)
+                            if !sameCoordinate(trailPath.coordinate(at: trailPath.count() - 1), routePoint) {
+                                trailPath.add(routePoint)
+                            }
                         }
                     }
                     lastTrailIdx = idx
                 }
+
+                if trailPath.count() == 0 {
+                    trailPath.add(pos)
+                } else {
+                    let lastPoint = trailPath.coordinate(at: trailPath.count() - 1)
+                    if !sameCoordinate(lastPoint, pos) && distanceBetween(lastPoint, pos) >= 1.0 {
+                        trailPath.add(pos)
+                    }
+                }
+
                 progressPolyline?.path = trailPath
             }
         }
