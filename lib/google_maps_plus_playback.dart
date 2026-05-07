@@ -152,6 +152,11 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
   /// Optional loading UI while native view creation is deferred.
   final GoogleMapsPlusPlaybackLoadingBuilder? loadingBuilder;
 
+  /// Whether to use Valhalla snapping for realistic road-based animation.
+  /// Defaults to false (uses direct Catmull-Rom interpolation).
+  /// Set to true to enable Valhalla snapping for realistic road-based movement.
+  final bool useSnappedRoute;
+
   const GoogleMapsPlusPlayback({
     super.key,
     required this.points,
@@ -192,6 +197,7 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
     this.onStopReached,
     this.deferNativeUntilSnappedRoute = true,
     this.loadingBuilder,
+    this.useSnappedRoute = false,
   });
 
   _MapSettings _getMapSettings() {
@@ -226,6 +232,7 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
       drawTrail: drawTrail,
       autoStart: autoStart,
       polylineColor: polylineColor.toARGB32(),
+      useSnappedRoute: useSnappedRoute,
     );
   }
 

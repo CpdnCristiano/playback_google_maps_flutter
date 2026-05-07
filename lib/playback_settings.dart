@@ -22,7 +22,7 @@ class _PlaybackSettings {
     this.drawTrail = true,
     this.polylineColor,
     this.autoStart = false,
-    this.useSnappedRoute = true,
+    this.useSnappedRoute = false,
   });
 
   Map<String, dynamic> toJson() {

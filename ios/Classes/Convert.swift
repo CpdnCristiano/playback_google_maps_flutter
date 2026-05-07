@@ -89,7 +89,7 @@ class Convert {
             drawTrail: m.getBool("drawTrail", true),
             polylineColor: m["polylineColor"],
             autoStart: m.getBool("autoStart", false),
-            useSnappedRoute: m.getBool("useSnappedRoute", true)
+            useSnappedRoute: m.getBool("useSnappedRoute", false)
         )
     }
 
