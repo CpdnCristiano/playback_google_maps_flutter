@@ -601,9 +601,12 @@ class PlaybackManager: NSObject {
             currentPointIdx = segIdx
         }
 
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         vehicleMarker?.position = pos
         let effectiveHeading = playbackSettings.dynamicRotation ? heading : points[currentPointIdx].bearing
         applyVehicleAppearance(heading: effectiveHeading)
+        CATransaction.commit()
 
         if followEnabled {
             mapView.moveCamera(GMSCameraUpdate.setTarget(pos))
@@ -652,6 +655,8 @@ class PlaybackManager: NSObject {
             )
         }
         
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         vehicleMarker?.position = pos
         let heading: Double
         if let snappedProgress {
@@ -668,6 +673,7 @@ class PlaybackManager: NSObject {
             heading = points[idx].bearing
         }
         applyVehicleAppearance(heading: heading)
+        CATransaction.commit()
 
         if followEnabled {
             mapView.moveCamera(GMSCameraUpdate.setTarget(pos))
