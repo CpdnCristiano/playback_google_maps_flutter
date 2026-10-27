@@ -74,7 +74,12 @@ class PlaybackManager(
         }
     
     private val turnDurationMs = 300.0
-    private val turnAngleThreshold = 30.0
+    private val turnAngleThreshold = 50.0
+    private fun getEffectiveTurnDurationMs(): Double {
+        // Pausa de curva ativa apenas em velocidade 1x.
+        // Em velocidades rápidas (>1x), pausas em waypoints tornam o movimento engasgado com saltos visíveis.
+        return if (playbackSpeed <= 1) turnDurationMs else 0.0
+    }
     private var timelineSteps: List<TimelineStep> = emptyList()
     private var totalTimelineDurationMs: Double = 0.0
     private var currentTimelineTimeMs: Double = 0.0
@@ -94,6 +99,9 @@ class PlaybackManager(
     private var lastAppliedIcon: BitmapDescriptor? = null
     private var progressPolyline: Polyline? = null
     private val stopMarkers = mutableMapOf<Int, Marker>()
+    private var lastTrailIdx = -1
+    private val trailPoints = mutableListOf<LatLng>()
+    private var lastProgressEmitTimeMs = 0L
     
     private var currentGlobalDistance = 0.0
     private var playbackSpeed = 1
@@ -170,27 +178,33 @@ class PlaybackManager(
             }
         }
 
+        val effectiveTurnDuration = getEffectiveTurnDurationMs()
+
         for (i in 0 until points.size - 1) {
             val p1 = LatLng(points[i].lat, points[i].lng)
             val p2 = LatLng(points[i + 1].lat, points[i + 1].lng)
             val dist = segmentDistances[i]
             val heading = segmentHeadings[i]
 
-            // Se não é o primeiro segmento, checar se houve curva no waypoint i
-            if (i > 0) {
+            // Curva parada (estilo iFood) apenas quando:
+            // 1) Em velocidade normal (effectiveTurnDuration > 0.0)
+            // 2) Ângulo de mudança expressivo (|diff| >= turnAngleThreshold) para não pausar em oscilações de GPS
+            // 3) Segmento anterior e atual com comprimento real (>= 8.0 metros) para evitar jitter parado
+            if (i > 0 && effectiveTurnDuration > 0.0) {
                 val prevHeading = segmentHeadings[i - 1]
+                val prevDist = segmentDistances[i - 1]
                 val diff = shortestAngle(prevHeading, heading)
-                if (Math.abs(diff) >= turnAngleThreshold) {
+                if (Math.abs(diff) >= turnAngleThreshold && dist >= 8.0 && prevDist >= 8.0) {
                     val turnStep = TimelineStep.Turn(
                         startTimeMs = currentTime,
-                        durationMs = turnDurationMs,
+                        durationMs = effectiveTurnDuration,
                         pointIndex = i,
                         position = p1,
                         startHeading = prevHeading,
                         deltaHeading = diff
                     )
                     steps.add(turnStep)
-                    currentTime += turnDurationMs
+                    currentTime += effectiveTurnDuration
                 }
             }
 
@@ -227,10 +241,20 @@ class PlaybackManager(
         if (timelineSteps.isEmpty()) return null
         if (timeMs <= 0.0) return timelineSteps.first()
         if (timeMs >= totalTimelineDurationMs) return timelineSteps.last()
-        for (step in timelineSteps) {
-            if (timeMs < step.endTimeMs) return step
+        var low = 0
+        var high = timelineSteps.size - 1
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            val step = timelineSteps[mid]
+            if (timeMs < step.startTimeMs) {
+                high = mid - 1
+            } else if (timeMs >= step.endTimeMs) {
+                low = mid + 1
+            } else {
+                return step
+            }
         }
-        return timelineSteps.last()
+        return timelineSteps.getOrNull(low.coerceIn(0, timelineSteps.size - 1)) ?: timelineSteps.last()
     }
 
     fun setupInitialState() {
@@ -273,6 +297,8 @@ class PlaybackManager(
         applyVehicleAppearance(initialHeading)
 
         progressPolyline?.remove()
+        trailPoints.clear()
+        lastTrailIdx = -1
         if (playbackSettings.drawTrail) {
             progressPolyline = googleMap.addPolyline(PolylineOptions().width(5f * density).color(Convert.toColor(playbackSettings.polylineColor)).zIndex(2f).geodesic(false))
         }
@@ -356,7 +382,12 @@ class PlaybackManager(
                     }
                     null -> Pair(0, 0.0)
                 }
-                channel.invokeMethod("onProgress", mapOf("index" to idx.toDouble() + localT))
+
+                val now = System.currentTimeMillis()
+                if (now - lastProgressEmitTimeMs >= 30L || currentTimelineTimeMs >= totalTimelineDurationMs) {
+                    lastProgressEmitTimeMs = now
+                    channel.invokeMethod("onProgress", mapOf("index" to idx.toDouble() + localT))
+                }
 
                 if (playbackSettings.showStops && points[idx].isStop && idx != lastStopIndexPassed) {
                     lastStopIndexPassed = idx
@@ -378,6 +409,16 @@ class PlaybackManager(
         isPausedForStop = false
         mainHandler.removeCallbacksAndMessages(null)
         playbackAnimator?.cancel()
+        val step = getStepForTime(currentTimelineTimeMs)
+        val (idx, localT) = when (step) {
+            is TimelineStep.Turn -> Pair(step.pointIndex, 0.0)
+            is TimelineStep.Move -> {
+                val t = if (step.durationMs > 0) ((currentTimelineTimeMs - step.startTimeMs) / step.durationMs).coerceIn(0.0, 1.0) else 0.0
+                Pair(step.segmentIndex, t)
+            }
+            null -> Pair(0, 0.0)
+        }
+        channel.invokeMethod("onProgress", mapOf("index" to idx.toDouble() + localT))
         channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "paused"))
     }
 
@@ -416,6 +457,15 @@ class PlaybackManager(
         }
         maxRenderedStopIndex = safeIndex - 1  // Não reconstrói stops além deste índice
 
+        trailPoints.clear()
+        if (playbackSettings.drawTrail) {
+            for (i in 0 until safeIndex) {
+                trailPoints.add(LatLng(points[i].lat, points[i].lng))
+            }
+            lastTrailIdx = safeIndex - 1
+            progressPolyline?.points = trailPoints.toList()
+        }
+
         if (playbackSettings.useSnappedRoute && snappedSegments.isNotEmpty()) {
             currentGlobalDistance = cumulativeDistances[safeIndex]
             updateVehiclePosition(currentGlobalDistance)
@@ -427,10 +477,39 @@ class PlaybackManager(
     }
 
     fun setSpeed(speed: Int) {
+        if (playbackSpeed == speed) return
+        val wasPlaying = isPlaying
+        val oldSpeed = playbackSpeed
         playbackSpeed = speed
-        if (isPlaying) {
-            pause()
-            play()
+
+        val needTimelineRebuild = (oldSpeed <= 1 && speed > 1) || (oldSpeed > 1 && speed <= 1)
+        if (needTimelineRebuild && timelineSteps.isNotEmpty()) {
+            val step = getStepForTime(currentTimelineTimeMs)
+            val currentSegIdx = when (step) {
+                is TimelineStep.Turn -> step.pointIndex
+                is TimelineStep.Move -> step.segmentIndex
+                null -> 0
+            }
+            val localT = when (step) {
+                is TimelineStep.Turn -> 0.0
+                is TimelineStep.Move -> if (step.durationMs > 0) ((currentTimelineTimeMs - step.startTimeMs) / step.durationMs).coerceIn(0.0, 1.0) else 0.0
+                null -> 0.0
+            }
+            if (wasPlaying) {
+                isPlaying = false
+                playbackAnimator?.cancel()
+            }
+            buildTimeline()
+            val newSegStart = stepStartTimesForPointIndex[currentSegIdx] ?: 0.0
+            val moveStep = timelineSteps.filterIsInstance<TimelineStep.Move>().firstOrNull { it.segmentIndex == currentSegIdx }
+            val segDuration = moveStep?.durationMs ?: 0.0
+            currentTimelineTimeMs = (newSegStart + localT * segDuration).coerceIn(0.0, totalTimelineDurationMs)
+            if (wasPlaying) play()
+        } else {
+            if (wasPlaying) {
+                pause()
+                play()
+            }
         }
     }
 
@@ -479,22 +558,46 @@ class PlaybackManager(
         }
 
         if (playbackSettings.drawTrail) {
-            val currentTrail = ArrayList<LatLng>(currentPointIdx + 2)
-            for (i in 0..currentPointIdx) {
-                currentTrail.add(LatLng(points[i].lat, points[i].lng))
+            if (currentPointIdx != lastTrailIdx) {
+                if (currentPointIdx < lastTrailIdx) {
+                    trailPoints.clear()
+                    for (i in 0..currentPointIdx) {
+                        trailPoints.add(LatLng(points[i].lat, points[i].lng))
+                    }
+                } else {
+                    val start = if (lastTrailIdx < 0) 0 else lastTrailIdx + 1
+                    for (i in start..currentPointIdx) {
+                        val pt = LatLng(points[i].lat, points[i].lng)
+                        if (trailPoints.isEmpty() || !sameCoordinate(trailPoints.last(), pt)) {
+                            trailPoints.add(pt)
+                        }
+                    }
+                }
+                lastTrailIdx = currentPointIdx
+                val currentList = ArrayList<LatLng>(trailPoints.size + 1)
+                currentList.addAll(trailPoints)
+                if (currentList.isEmpty() || !sameCoordinate(currentList.last(), pos)) {
+                    currentList.add(pos)
+                }
+                progressPolyline?.points = currentList
+            } else {
+                val lastPt = trailPoints.lastOrNull()
+                if (lastPt == null || distanceBetween(lastPt, pos) >= 1.0) {
+                    val currentList = ArrayList<LatLng>(trailPoints.size + 1)
+                    currentList.addAll(trailPoints)
+                    currentList.add(pos)
+                    progressPolyline?.points = currentList
+                }
             }
-            if (currentTrail.isEmpty() || !sameCoordinate(currentTrail.last(), pos)) {
-                currentTrail.add(pos)
-            }
-            progressPolyline?.points = currentTrail
         }
 
         if (playbackSettings.showStops) {
             if (currentPointIdx > maxRenderedStopIndex) {
+                val startIdx = if (maxRenderedStopIndex < 0) 0 else maxRenderedStopIndex + 1
+                for (i in startIdx..currentPointIdx) {
+                    if (points[i].isStop) checkAndAddStop(i)
+                }
                 maxRenderedStopIndex = currentPointIdx
-            }
-            for (i in 0..maxRenderedStopIndex) {
-                if (points[i].isStop) checkAndAddStop(i)
             }
         }
     }
@@ -955,6 +1058,9 @@ class PlaybackManager(
         lastStopIndexPassed = -1
         maxRenderedStopIndex = -1
         lastAppliedIcon = null
+        trailPoints.clear()
+        lastTrailIdx = -1
+        lastProgressEmitTimeMs = 0L
         vehicleMarker?.remove()
         vehicleMarker = null
         progressPolyline?.remove()

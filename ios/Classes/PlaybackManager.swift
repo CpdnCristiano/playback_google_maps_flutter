@@ -75,7 +75,12 @@ class PlaybackManager: NSObject {
     }
 
     private let turnDurationMs: Double = 300.0
-    private let turnAngleThreshold: Double = 30.0
+    private let turnAngleThreshold: Double = 50.0
+    private func getEffectiveTurnDurationMs() -> Double {
+        // Pausa de curva ativa apenas em velocidade 1x.
+        // Em velocidades rápidas (>1x), pausas em waypoints tornam o movimento engasgado com saltos visíveis.
+        return playbackSpeed <= 1 ? turnDurationMs : 0.0
+    }
     private var timelineSteps: [TimelineStep] = []
     private var totalTimelineDurationMs: Double = 0.0
     private var currentTimelineTimeMs: Double = 0.0
@@ -97,6 +102,7 @@ class PlaybackManager: NSObject {
     private var lastAppliedIcon: UIImage?
     private var progressPolyline: GMSPolyline?
     private var stopMarkers: [Int: GMSMarker] = [:]
+    private var lastProgressEmitTime: CFTimeInterval = 0
     
     private var currentGlobalDistance: Double = 0.0
     private var playbackSpeed: Int = 1
@@ -174,27 +180,33 @@ class PlaybackManager: NSObject {
             }
         }
 
+        let effectiveTurnDuration = getEffectiveTurnDurationMs()
+
         for i in 0..<(points.count - 1) {
             let p1 = CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng)
             let p2 = CLLocationCoordinate2D(latitude: points[i + 1].lat, longitude: points[i + 1].lng)
             let dist = segmentDistances[i]
             let heading = segmentHeadings[i]
 
-            // Se não é o primeiro segmento, checar se houve curva no waypoint i
-            if i > 0 {
+            // Curva parada (estilo iFood) apenas quando:
+            // 1) Em velocidade normal (effectiveTurnDuration > 0.0)
+            // 2) Ângulo de mudança expressivo (|diff| >= turnAngleThreshold) para não pausar em oscilações de GPS
+            // 3) Segmento anterior e atual com comprimento real (>= 8.0 metros) para evitar jitter parado
+            if i > 0 && effectiveTurnDuration > 0.0 {
                 let prevHeading = segmentHeadings[i - 1]
+                let prevDist = segmentDistances[i - 1]
                 let diff = shortestAngle(from: prevHeading, to: heading)
-                if abs(diff) >= turnAngleThreshold {
+                if abs(diff) >= turnAngleThreshold && dist >= 8.0 && prevDist >= 8.0 {
                     let turnStep = TimelineStep.turn(
                         startTimeMs: currentTime,
-                        durationMs: turnDurationMs,
+                        durationMs: effectiveTurnDuration,
                         pointIndex: i,
                         position: p1,
                         startHeading: prevHeading,
                         deltaHeading: diff
                     )
                     steps.append(turnStep)
-                    currentTime += turnDurationMs
+                    currentTime += effectiveTurnDuration
                 }
             }
 
@@ -231,10 +243,21 @@ class PlaybackManager: NSObject {
         guard !timelineSteps.isEmpty else { return nil }
         if timeMs <= 0.0 { return timelineSteps.first }
         if timeMs >= totalTimelineDurationMs { return timelineSteps.last }
-        for step in timelineSteps {
-            if timeMs < step.endTimeMs { return step }
+        var low = 0
+        var high = timelineSteps.count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            let step = timelineSteps[mid]
+            if timeMs < step.startTimeMs {
+                high = mid - 1
+            } else if timeMs >= step.endTimeMs {
+                low = mid + 1
+            } else {
+                return step
+            }
         }
-        return timelineSteps.last
+        let safeIndex = min(max(low, 0), timelineSteps.count - 1)
+        return timelineSteps[safeIndex]
     }
 
     func setupInitialState() {
@@ -425,7 +448,11 @@ class PlaybackManager: NSObject {
                 return (segIdx, t)
             }
         }()
-        channel.invokeMethod("onProgress", arguments: ["index": Double(idx) + localT])
+        let now = CACurrentMediaTime()
+        if now - lastProgressEmitTime >= 0.03 || currentTimelineTimeMs >= totalTimelineDurationMs {
+            lastProgressEmitTime = now
+            channel.invokeMethod("onProgress", arguments: ["index": Double(idx) + localT])
+        }
 
         if playbackSettings.showStops && points[idx].isStop && idx != lastStopIndexPassed {
             lastStopIndexPassed = idx
@@ -437,6 +464,18 @@ class PlaybackManager: NSObject {
         isPlaying = false
         isPausedForStop = false
         stopDisplayLink()
+        if let step = getStep(for: currentTimelineTimeMs) {
+            let (idx, localT): (Int, Double) = {
+                switch step {
+                case .turn(_, _, let ptIdx, _, _, _):
+                    return (ptIdx, 0.0)
+                case .move(let startMs, let durMs, let segIdx, _, _, _):
+                    let t = durMs > 0 ? min(max((currentTimelineTimeMs - startMs) / durMs, 0.0), 1.0) : 0.0
+                    return (segIdx, t)
+                }
+            }()
+            channel.invokeMethod("onProgress", arguments: ["index": Double(idx) + localT])
+        }
         channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "paused"])
     }
 
@@ -490,10 +529,48 @@ class PlaybackManager: NSObject {
     }
 
     func setSpeed(_ speed: Int) {
+        guard playbackSpeed != speed else { return }
+        let wasPlaying = isPlaying
+        let oldSpeed = playbackSpeed
         playbackSpeed = speed
-        if isPlaying {
-            pause()
-            play()
+
+        let needTimelineRebuild = (oldSpeed <= 1 && speed > 1) || (oldSpeed > 1 && speed <= 1)
+        if needTimelineRebuild && !timelineSteps.isEmpty {
+            let step = getStep(for: currentTimelineTimeMs)
+            let (currentSegIdx, localT): (Int, Double) = {
+                guard let step = step else { return (0, 0.0) }
+                switch step {
+                case .turn(_, _, let ptIdx, _, _, _):
+                    return (ptIdx, 0.0)
+                case .move(let startMs, let durMs, let segIdx, _, _, _):
+                    let t = durMs > 0 ? min(max((currentTimelineTimeMs - startMs) / durMs, 0.0), 1.0) : 0.0
+                    return (segIdx, t)
+                }
+            }()
+
+            if wasPlaying {
+                stopDisplayLink()
+                isPlaying = false
+            }
+            buildTimeline()
+            let newSegStart = stepStartTimesForPointIndex[currentSegIdx] ?? 0.0
+            let moveDuration: Double = {
+                for s in timelineSteps {
+                    if case .move(_, let durMs, let sIdx, _, _, _) = s, sIdx == currentSegIdx {
+                        return durMs
+                    }
+                }
+                return 0.0
+            }()
+            currentTimelineTimeMs = min(max(newSegStart + localT * moveDuration, 0.0), totalTimelineDurationMs)
+            if wasPlaying {
+                play()
+            }
+        } else {
+            if wasPlaying {
+                pause()
+                play()
+            }
         }
     }
 
@@ -545,10 +622,11 @@ class PlaybackManager: NSObject {
 
         if playbackSettings.showStops {
             if currentPointIdx > maxRenderedStopIndex {
+                let startIdx = maxRenderedStopIndex < 0 ? 0 : maxRenderedStopIndex + 1
+                for i in startIdx...currentPointIdx {
+                    if points[i].isStop { checkAndAddStop(i) }
+                }
                 maxRenderedStopIndex = currentPointIdx
-            }
-            for i in 0...maxRenderedStopIndex {
-                if points[i].isStop { checkAndAddStop(i) }
             }
         }
     }
