@@ -94,6 +94,7 @@ class PlaybackManager: NSObject {
     private var vehicleMarker: GMSMarker?
     private var vehicleIconNormal: UIImage?
     private var vehicleIconFlipped: UIImage?
+    private var lastAppliedIcon: UIImage?
     private var progressPolyline: GMSPolyline?
     private var stopMarkers: [Int: GMSMarker] = [:]
     
@@ -260,14 +261,22 @@ class PlaybackManager: NSObject {
             return points[0].bearing
         }()
         
-        vehicleMarker?.map = nil
-        let marker = GMSMarker(position: firstPos)
-        marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
-        marker.isFlat = true
-        marker.zIndex = 10
-        marker.map = mapView
-        marker.icon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
-        vehicleMarker = marker
+        let initialIcon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+        if let marker = vehicleMarker {
+            marker.position = firstPos
+            if lastAppliedIcon !== initialIcon {
+                marker.icon = initialIcon
+            }
+        } else {
+            let marker = GMSMarker(position: firstPos)
+            marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
+            marker.isFlat = true
+            marker.zIndex = 10
+            marker.icon = initialIcon
+            marker.map = mapView
+            vehicleMarker = marker
+        }
+        lastAppliedIcon = initialIcon
 
         applyVehicleAppearance(heading: initialHeading)
 
@@ -975,15 +984,23 @@ class PlaybackManager: NSObject {
 
         if playbackSettings.canRotate {
             vehicleMarker.rotation = heading
-            vehicleMarker.icon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+            let targetIcon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+            if lastAppliedIcon !== targetIcon {
+                vehicleMarker.icon = targetIcon
+                lastAppliedIcon = targetIcon
+            }
             return
         }
 
         let isGoingLeft = heading > 180.0
         vehicleMarker.rotation = 0
-        vehicleMarker.icon = isGoingLeft
+        let targetIcon = isGoingLeft
             ? (vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan))
             : (vehicleIconFlipped ?? vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan))
+        if lastAppliedIcon !== targetIcon {
+            vehicleMarker.icon = targetIcon
+            lastAppliedIcon = targetIcon
+        }
     }
 
     private func reset() {
@@ -994,6 +1011,7 @@ class PlaybackManager: NSObject {
         isPausedForStop = false
         lastStopIndexPassed = -1
         maxRenderedStopIndex = -1
+        lastAppliedIcon = nil
         vehicleMarker?.map = nil
         vehicleMarker = nil
         progressPolyline?.map = nil

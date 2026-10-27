@@ -91,6 +91,7 @@ class PlaybackManager(
     private var vehicleMarker: Marker? = null
     private var vehicleIconNormal: BitmapDescriptor? = null
     private var vehicleIconFlipped: BitmapDescriptor? = null
+    private var lastAppliedIcon: BitmapDescriptor? = null
     private var progressPolyline: Polyline? = null
     private val stopMarkers = mutableMapOf<Int, Marker>()
     
@@ -249,17 +250,25 @@ class PlaybackManager(
             points[0].bearing.toFloat()
         }
         
-        vehicleMarker?.remove()
-        vehicleMarker = googleMap.addMarker(
-            MarkerOptions()
-                .position(firstPos)
-                .anchor(0.5f, 0.5f)
-                .flat(true)
-                .zIndex(10f)
-                .apply {
-                    icon(vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN))
-                }
-        )
+        val initialIcon = vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
+
+        val marker = vehicleMarker
+        if (marker == null) {
+            vehicleMarker = googleMap.addMarker(
+                MarkerOptions()
+                    .position(firstPos)
+                    .anchor(0.5f, 0.5f)
+                    .flat(true)
+                    .zIndex(10f)
+                    .icon(initialIcon)
+            )
+        } else {
+            marker.position = firstPos
+            if (lastAppliedIcon !== initialIcon) {
+                marker.setIcon(initialIcon)
+            }
+        }
+        lastAppliedIcon = initialIcon
 
         applyVehicleAppearance(initialHeading)
 
@@ -883,21 +892,29 @@ class PlaybackManager(
     }
 
     private fun applyVehicleAppearance(heading: Float) {
+        val marker = vehicleMarker ?: return
+
         if (playbackSettings.canRotate) {
-            vehicleMarker?.rotation = heading
-            vehicleMarker?.setIcon(vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN))
+            marker.rotation = heading
+            val targetIcon = vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
+            if (lastAppliedIcon !== targetIcon) {
+                marker.setIcon(targetIcon)
+                lastAppliedIcon = targetIcon
+            }
             return
         }
 
         val isGoingLeft = heading > 180f
-        vehicleMarker?.rotation = 0f
-        vehicleMarker?.setIcon(
-            if (isGoingLeft) {
-                vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
-            } else {
-                vehicleIconFlipped ?: vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
-            }
-        )
+        marker.rotation = 0f
+        val targetIcon = if (isGoingLeft) {
+            vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
+        } else {
+            vehicleIconFlipped ?: vehicleIconNormal ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_CYAN)
+        }
+        if (lastAppliedIcon !== targetIcon) {
+            marker.setIcon(targetIcon)
+            lastAppliedIcon = targetIcon
+        }
     }
 
     private fun getSegmentIndexForDistance(distance: Double): Int {
@@ -937,6 +954,7 @@ class PlaybackManager(
         isPausedForStop = false
         lastStopIndexPassed = -1
         maxRenderedStopIndex = -1
+        lastAppliedIcon = null
         vehicleMarker?.remove()
         vehicleMarker = null
         progressPolyline?.remove()
