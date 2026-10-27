@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.os.Handler
 import android.os.Looper
+import android.view.Choreographer
 import android.view.animation.LinearInterpolator
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
@@ -46,13 +47,18 @@ class PlaybackManager(
     var playbackSettings = PlaybackSettings()
     
     private val turnDurationMs = 300.0
-    private val turnAngleThreshold = 50.0
+    private val turnAngleThreshold = 30.0
     
     private var currentSegmentIndex = 0
-    private var currentSegmentFraction = 0f
+    private var currentSegmentFraction = 0.0
     private var isTurning = false
+    private var turnProgress = 0.0
+    private var turnStartHeading = 0f
+    private var turnDeltaHeading = 0f
+    private var lastFrameTimeMs = 0.0
 
     private var points: List<GoogleMapsPlaybackPoint> = emptyList()
+    private var segmentHeadings = FloatArray(0)
     private var snappedRoute: List<LatLng> = emptyList()  // Rota completa da Valhalla
     private var routeAnchors: List<RouteAnchor> = emptyList()
     private var snappedSegments: List<SnappedSegment> = emptyList()
@@ -85,6 +91,14 @@ class PlaybackManager(
 
     var followEnabled = true
 
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!isPlaying) return
+            val nowMs = frameTimeNanos / 1_000_000.0
+            onAnimationFrame(nowMs)
+        }
+    }
+
     fun setPoints(newPoints: List<GoogleMapsPlaybackPoint>) {
         this.points = newPoints
         calculateDistances()
@@ -108,6 +122,10 @@ class PlaybackManager(
     private fun calculateDistances() {
         cumulativeDistances.clear()
         totalDistance = 0.0
+        if (points.isEmpty()) {
+            segmentHeadings = FloatArray(0)
+            return
+        }
         cumulativeDistances.add(0.0)
         for (i in 0 until points.size - 1) {
             val results = FloatArray(1)
@@ -118,6 +136,30 @@ class PlaybackManager(
             )
             totalDistance += results[0].toDouble()
             cumulativeDistances.add(totalDistance)
+        }
+
+        if (points.size >= 2) {
+            val headings = FloatArray(points.size - 1)
+            var lastValidHeading = points[0].bearing.toFloat()
+            for (i in 0 until points.size - 1) {
+                val p1 = LatLng(points[i].lat, points[i].lng)
+                val p2 = LatLng(points[i + 1].lat, points[i + 1].lng)
+                if (!sameCoordinate(p1, p2)) {
+                    lastValidHeading = computeHeading(p1, p2)
+                    break
+                }
+            }
+            for (i in 0 until points.size - 1) {
+                val p1 = LatLng(points[i].lat, points[i].lng)
+                val p2 = LatLng(points[i + 1].lat, points[i + 1].lng)
+                if (!sameCoordinate(p1, p2)) {
+                    lastValidHeading = computeHeading(p1, p2)
+                }
+                headings[i] = lastValidHeading
+            }
+            segmentHeadings = headings
+        } else {
+            segmentHeadings = FloatArray(0)
         }
     }
 
@@ -134,10 +176,8 @@ class PlaybackManager(
         prepareVehicleIcons()
         
         val firstPos = LatLng(points[0].lat, points[0].lng)
-        val initialHeading = if (points.size > 1) {
-            val p1 = LatLng(points[0].lat, points[0].lng)
-            val p2 = LatLng(points[1].lat, points[1].lng)
-            if (!sameCoordinate(p1, p2)) computeHeading(p1, p2) else points[0].bearing.toFloat()
+        val initialHeading = if (segmentHeadings.isNotEmpty()) {
+            segmentHeadings[0]
         } else {
             points[0].bearing.toFloat()
         }
@@ -162,7 +202,7 @@ class PlaybackManager(
         }
         lastAppliedIcon = initialIcon
 
-        applyVehicleAppearance(initialHeading)
+        applyVehicleAppearance(if (playbackSettings.dynamicRotation) initialHeading else points[0].bearing.toFloat())
 
         progressPolyline?.remove()
         trailPoints.clear()
@@ -176,8 +216,9 @@ class PlaybackManager(
         googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLngZoom(firstPos, 16f))
         
         currentSegmentIndex = 0
-        currentSegmentFraction = 0f
-        updateTrail(0, firstPos)
+        currentSegmentFraction = 0.0
+        isTurning = false
+        turnProgress = 0.0
 
         if (playbackSettings.autoStart) {
             play()
@@ -185,10 +226,9 @@ class PlaybackManager(
     }
 
     fun play() {
-        if (isPlaying || points.size < 2) return
+        if (isPlaying || points.size < 2 || totalDistance <= 0) return
 
         if (playbackSettings.useSnappedRoute && snappedSegments.isNotEmpty()) {
-            if (totalDistance <= 0) return
             isPlaying = true
             val durationMs = (((totalDistance - currentGlobalDistance) / playbackSettings.baseSpeed) * 1000 / playbackSpeed).toLong()
             playbackAnimator?.cancel()
@@ -221,20 +261,25 @@ class PlaybackManager(
 
         if (currentSegmentIndex >= points.size - 1) {
             currentSegmentIndex = 0
-            currentSegmentFraction = 0f
+            currentSegmentFraction = 0.0
+            isTurning = false
+            turnProgress = 0.0
         }
 
         isPlaying = true
+        lastFrameTimeMs = 0.0
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        Choreographer.getInstance().postFrameCallback(frameCallback)
         channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "playing"))
-        startSegment(currentSegmentIndex, currentSegmentFraction)
     }
 
     fun pause() {
         isPlaying = false
         isPausedForStop = false
         mainHandler.removeCallbacksAndMessages(null)
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
         playbackAnimator?.cancel()
-        val currentIdx = currentSegmentIndex.toDouble() + currentSegmentFraction.toDouble()
+        val currentIdx = currentSegmentIndex.toDouble() + currentSegmentFraction.coerceIn(0.0, 1.0)
         channel.invokeMethod("onProgress", mapOf("index" to currentIdx))
         channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "paused"))
     }
@@ -281,12 +326,12 @@ class PlaybackManager(
         }
 
         currentSegmentIndex = safeIndex.coerceAtMost(points.size - 2)
-        currentSegmentFraction = if (safeIndex >= points.size - 1) 1.0f else 0.0f
+        currentSegmentFraction = if (safeIndex >= points.size - 1) 1.0 else 0.0
+        isTurning = false
+        turnProgress = 0.0
 
-        val segHeading = if (safeIndex < points.size - 1) {
-            val p1 = LatLng(points[safeIndex].lat, points[safeIndex].lng)
-            val p2 = LatLng(points[safeIndex + 1].lat, points[safeIndex + 1].lng)
-            if (!sameCoordinate(p1, p2)) computeHeading(p1, p2) else points[safeIndex].bearing.toFloat()
+        val segHeading = if (currentSegmentIndex < segmentHeadings.size) {
+            segmentHeadings[currentSegmentIndex]
         } else {
             points[safeIndex].bearing.toFloat()
         }
@@ -312,156 +357,184 @@ class PlaybackManager(
         if (playbackSpeed == speed) return
         val wasPlaying = isPlaying
         playbackSpeed = speed
-        if (wasPlaying) {
-            playbackAnimator?.cancel()
-            startSegment(currentSegmentIndex, currentSegmentFraction)
+        if (playbackSettings.useSnappedRoute && snappedSegments.isNotEmpty() && wasPlaying) {
+            pause()
+            play()
         }
     }
 
-    private fun startSegment(segIndex: Int, startFraction: Float) {
-        if (!isPlaying) return
-        if (segIndex >= points.size - 1) {
-            currentSegmentIndex = points.size - 1
-            currentSegmentFraction = 0f
-            val lastPoint = LatLng(points.last().lat, points.last().lng)
-            vehicleMarker?.position = lastPoint
-            updateTrail(points.size - 1, lastPoint)
-            isPlaying = false
-            channel.invokeMethod("onProgress", mapOf("index" to (points.size - 1).toDouble()))
-            channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "finished"))
+    private fun onAnimationFrame(nowMs: Double) {
+        if (!isPlaying || points.size < 2) return
+
+        if (lastFrameTimeMs <= 0.0) {
+            lastFrameTimeMs = nowMs
+            Choreographer.getInstance().postFrameCallback(frameCallback)
             return
         }
 
-        currentSegmentIndex = segIndex
-        currentSegmentFraction = startFraction.coerceIn(0f, 1f)
+        val dtMs = (nowMs - lastFrameTimeMs).coerceIn(0.0, 100.0)
+        lastFrameTimeMs = nowMs
 
-        val p1 = points[segIndex]
-        val p2 = points[segIndex + 1]
-        val start = LatLng(p1.lat, p1.lng)
-        val end = LatLng(p2.lat, p2.lng)
-        val dist = distanceBetween(start, end)
-
-        if (dist < 0.5) {
-            currentSegmentFraction = 1f
-            vehicleMarker?.position = end
-            updateTrail(segIndex + 1, end)
-            checkStopAtPoint(segIndex + 1)
-            startSegment(segIndex + 1, 0f)
-            return
-        }
-
-        val segHeading = if (!sameCoordinate(start, end)) {
-            computeHeading(start, end)
-        } else {
-            p1.bearing.toFloat()
-        }
-
-        // Animação de curva estática estilo iFood no início do waypoint (apenas em 1x)
-        if (startFraction == 0f && segIndex > 0 && playbackSpeed <= 1) {
-            val prevP1 = LatLng(points[segIndex - 1].lat, points[segIndex - 1].lng)
-            val prevHeading = if (!sameCoordinate(prevP1, start)) computeHeading(prevP1, start) else points[segIndex - 1].bearing.toFloat()
-            val diff = shortestAngle(prevHeading, segHeading)
-            val prevDist = distanceBetween(prevP1, start)
-            if (Math.abs(diff) >= turnAngleThreshold && dist >= 8.0 && prevDist >= 8.0) {
-                startTurn(segIndex, prevHeading, diff) {
-                    startSegmentMove(segIndex, start, end, segHeading, dist, 0f)
+        if (isTurning) {
+            turnProgress += dtMs / turnDurationMs
+            val pos = LatLng(points[currentSegmentIndex].lat, points[currentSegmentIndex].lng)
+            if (turnProgress < 1.0) {
+                val raw = (turnStartHeading + turnDeltaHeading * turnProgress.toFloat()) % 360f
+                val heading = (raw + 360f) % 360f
+                vehicleMarker?.position = pos
+                applyVehicleAppearance(heading)
+                if (followEnabled) {
+                    googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLng(pos))
                 }
+                Choreographer.getInstance().postFrameCallback(frameCallback)
+                return
+            } else {
+                isTurning = false
+                turnProgress = 0.0
+                val finalHeading = if (playbackSettings.dynamicRotation && currentSegmentIndex < segmentHeadings.size) {
+                    segmentHeadings[currentSegmentIndex]
+                } else {
+                    points[currentSegmentIndex].bearing.toFloat()
+                }
+                vehicleMarker?.position = pos
+                applyVehicleAppearance(finalHeading)
+                if (followEnabled) {
+                    googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLng(pos))
+                }
+                Choreographer.getInstance().postFrameCallback(frameCallback)
                 return
             }
         }
 
-        startSegmentMove(segIndex, start, end, segHeading, dist, startFraction)
-    }
+        // Avança pontos duplicados na mesma coordenada (distância zero)
+        while (currentSegmentIndex < points.size - 1) {
+            val p1 = points[currentSegmentIndex]
+            val p2 = points[currentSegmentIndex + 1]
+            val start = LatLng(p1.lat, p1.lng)
+            val end = LatLng(p2.lat, p2.lng)
+            val dist = distanceBetween(start, end)
+            if (dist >= 0.01) break
 
-    private fun startSegmentMove(
-        segIndex: Int,
-        start: LatLng,
-        end: LatLng,
-        heading: Float,
-        dist: Double,
-        startFraction: Float
-    ) {
-        if (!isPlaying) return
-        currentSegmentIndex = segIndex
-        val effectiveHeading = if (playbackSettings.dynamicRotation) heading else points[segIndex].bearing.toFloat()
-        applyVehicleAppearance(effectiveHeading)
+            checkStopAtPoint(currentSegmentIndex + 1)
+            if (currentSegmentIndex + 1 >= points.size - 1) {
+                finishPlaybackAtLastPoint()
+                return
+            }
+            val nextIdx = currentSegmentIndex + 1
+            val inHeading = segmentHeadings[currentSegmentIndex]
+            val outHeading = segmentHeadings[nextIdx]
+            val diff = shortestAngle(inHeading, outHeading)
+            currentSegmentIndex = nextIdx
+            currentSegmentFraction = 0.0
+            if (playbackSettings.canRotate && playbackSettings.dynamicRotation && Math.abs(diff) > turnAngleThreshold) {
+                isTurning = true
+                turnProgress = 0.0
+                turnStartHeading = inHeading
+                turnDeltaHeading = diff
+                Choreographer.getInstance().postFrameCallback(frameCallback)
+                return
+            }
+        }
+
+        val segIdx = currentSegmentIndex
+        val p1 = points[segIdx]
+        val p2 = points[segIdx + 1]
+        val start = LatLng(p1.lat, p1.lng)
+        val end = LatLng(p2.lat, p2.lng)
+        val dist = distanceBetween(start, end)
 
         val baseDurationMs = if (playbackSettings.baseSpeed > 0) (dist / playbackSettings.baseSpeed) * 1000.0 else 0.0
-        val totalDurationMs = baseDurationMs / playbackSpeed
-        val remainingFraction = (1.0f - startFraction).coerceIn(0.0f, 1.0f)
-        val actualDurationMs = (totalDurationMs * remainingFraction).toLong().coerceAtLeast(1L)
+        val segmentDurationMs = if (playbackSpeed > 0) baseDurationMs / playbackSpeed else 0.0
 
-        playbackAnimator?.cancel()
-        playbackAnimator = ValueAnimator.ofFloat(startFraction, 1.0f).apply {
-            duration = actualDurationMs
-            interpolator = LinearInterpolator()
-            addUpdateListener { anim ->
-                val fraction = anim.animatedValue as Float
-                currentSegmentFraction = fraction
+        if (segmentDurationMs > 0.0) {
+            currentSegmentFraction += dtMs / segmentDurationMs
+        } else {
+            currentSegmentFraction = 1.0
+        }
 
-                val lat = start.latitude + (end.latitude - start.latitude) * fraction
-                val lng = start.longitude + (end.longitude - start.longitude) * fraction
-                val pos = LatLng(lat, lng)
-
-                vehicleMarker?.position = pos
-                if (followEnabled) {
-                    googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLng(pos))
-                }
-                updateTrail(segIndex, pos)
-
-                val now = System.currentTimeMillis()
-                if (now - lastProgressEmitTimeMs >= 30L) {
-                    lastProgressEmitTimeMs = now
-                    channel.invokeMethod("onProgress", mapOf("index" to segIndex.toDouble() + fraction.toDouble()))
-                }
+        if (currentSegmentFraction < 1.0) {
+            val f = currentSegmentFraction.coerceIn(0.0, 1.0)
+            val pos = LatLng(
+                start.latitude + (end.latitude - start.latitude) * f,
+                start.longitude + (end.longitude - start.longitude) * f
+            )
+            val heading = if (playbackSettings.dynamicRotation && segIdx < segmentHeadings.size) {
+                segmentHeadings[segIdx]
+            } else {
+                p1.bearing.toFloat()
             }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    if (!isPlaying || currentSegmentIndex != segIndex) return
+            vehicleMarker?.position = pos
+            applyVehicleAppearance(heading)
+            if (followEnabled) {
+                googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLng(pos))
+            }
+            updateTrail(segIdx, pos)
 
-                    currentSegmentFraction = 1.0f
-                    vehicleMarker?.position = end
-                    if (followEnabled) {
-                        googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLng(end))
-                    }
-                    updateTrail(segIndex + 1, end)
-                    channel.invokeMethod("onProgress", mapOf("index" to (segIndex + 1).toDouble()))
+            val now = System.currentTimeMillis()
+            if (now - lastProgressEmitTimeMs >= 30L) {
+                lastProgressEmitTimeMs = now
+                channel.invokeMethod("onProgress", mapOf("index" to segIdx.toDouble() + f))
+            }
 
-                    checkStopAtPoint(segIndex + 1)
-                    startSegment(segIndex + 1, 0.0f)
-                }
-            })
-            start()
+            Choreographer.getInstance().postFrameCallback(frameCallback)
+        } else {
+            // Completa obrigatoriamente a chegada até o ponto `end` antes de mudar de segmento
+            currentSegmentFraction = 1.0
+            val arriveHeading = if (playbackSettings.dynamicRotation && segIdx < segmentHeadings.size) {
+                segmentHeadings[segIdx]
+            } else {
+                p1.bearing.toFloat()
+            }
+            vehicleMarker?.position = end
+            applyVehicleAppearance(arriveHeading)
+            if (followEnabled) {
+                googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLng(end))
+            }
+            updateTrail(segIdx + 1, end)
+            channel.invokeMethod("onProgress", mapOf("index" to (segIdx + 1).toDouble()))
+
+            checkStopAtPoint(segIdx + 1)
+
+            if (segIdx + 1 >= points.size - 1) {
+                finishPlaybackAtLastPoint()
+                return
+            }
+
+            val nextIdx = segIdx + 1
+            val inHeading = segmentHeadings[segIdx]
+            val outHeading = segmentHeadings[nextIdx]
+            val diff = shortestAngle(inHeading, outHeading)
+
+            currentSegmentIndex = nextIdx
+            currentSegmentFraction = 0.0
+
+            if (playbackSettings.canRotate && playbackSettings.dynamicRotation && Math.abs(diff) > turnAngleThreshold) {
+                isTurning = true
+                turnProgress = 0.0
+                turnStartHeading = inHeading
+                turnDeltaHeading = diff
+            }
+
+            Choreographer.getInstance().postFrameCallback(frameCallback)
         }
     }
 
-    private fun startTurn(
-        segIndex: Int,
-        startHeading: Float,
-        deltaHeading: Float,
-        onComplete: () -> Unit
-    ) {
-        if (!isPlaying) return
-        isTurning = true
-        playbackAnimator?.cancel()
-        playbackAnimator = ValueAnimator.ofFloat(0.0f, 1.0f).apply {
-            duration = turnDurationMs.toLong()
-            interpolator = LinearInterpolator()
-            addUpdateListener { anim ->
-                val fraction = anim.animatedValue as Float
-                val raw = (startHeading + deltaHeading * fraction) % 360f
-                val h = (raw + 360f) % 360f
-                applyVehicleAppearance(h)
-            }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    isTurning = false
-                    if (!isPlaying || currentSegmentIndex != segIndex) return
-                    onComplete()
-                }
-            })
-            start()
+    private fun finishPlaybackAtLastPoint() {
+        val lastIdx = points.size - 1
+        currentSegmentIndex = (points.size - 2).coerceAtLeast(0)
+        currentSegmentFraction = 1.0
+        isTurning = false
+        turnProgress = 0.0
+        val lastPoint = LatLng(points[lastIdx].lat, points[lastIdx].lng)
+        vehicleMarker?.position = lastPoint
+        if (followEnabled) {
+            googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLng(lastPoint))
         }
+        updateTrail(lastIdx, lastPoint)
+        isPlaying = false
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        channel.invokeMethod("onProgress", mapOf("index" to lastIdx.toDouble()))
+        channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "finished"))
     }
 
     private fun updateTrail(lastPassedIndex: Int, currentPos: LatLng) {
@@ -935,11 +1008,14 @@ class PlaybackManager(
     }
 
     private fun reset() {
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
         playbackAnimator?.cancel()
         mainHandler.removeCallbacksAndMessages(null)
         currentSegmentIndex = 0
-        currentSegmentFraction = 0f
+        currentSegmentFraction = 0.0
         isTurning = false
+        turnProgress = 0.0
+        lastFrameTimeMs = 0.0
         currentGlobalDistance = 0.0
         isPlaying = false
         isPausedForStop = false
@@ -958,6 +1034,7 @@ class PlaybackManager(
     }
 
     fun dispose() {
+        Choreographer.getInstance().removeFrameCallback(frameCallback)
         playbackAnimator?.cancel()
         reset()
     }

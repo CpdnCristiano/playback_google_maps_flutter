@@ -47,7 +47,20 @@ class PlaybackManager: NSObject {
         useSnappedRoute: false
     )
     
+    private let turnDurationMs: Double = 300.0
+    private let turnAngleThreshold: Double = 30.0
+
+    private var currentSegmentIndex: Int = 0
+    private var currentSegmentFraction: Double = 0.0
+    private var isTurning: Bool = false
+    private var turnProgress: Double = 0.0
+    private var turnStartHeading: Double = 0.0
+    private var turnDeltaHeading: Double = 0.0
+    private var lastFrameTimeMs: Double = 0.0
+    private var lastProgressEmitTime: CFTimeInterval = 0
+
     private var points: [GoogleMapsPlaybackPoint] = []
+    private var segmentHeadings: [Double] = []
     private var snappedRoute: [CLLocationCoordinate2D] = []  // Rota completa da Valhalla
     private var routeAnchors: [RouteAnchor] = []
     private var snappedSegments: [SnappedSegment] = []
@@ -60,6 +73,7 @@ class PlaybackManager: NSObject {
     private var vehicleMarker: GMSMarker?
     private var vehicleIconNormal: UIImage?
     private var vehicleIconFlipped: UIImage?
+    private var lastAppliedIcon: UIImage?
     private var progressPolyline: GMSPolyline?
     private var stopMarkers: [Int: GMSMarker] = [:]
     
@@ -107,6 +121,7 @@ class PlaybackManager: NSObject {
 
     private func calculateDistances() {
         cumulativeDistances.removeAll()
+        segmentHeadings.removeAll()
         totalDistance = 0.0
         guard !points.isEmpty else { return }
         cumulativeDistances.append(0.0)
@@ -115,6 +130,33 @@ class PlaybackManager: NSObject {
             totalDistance += dist
             cumulativeDistances.append(totalDistance)
         }
+
+        if points.count >= 2 {
+            var lastValidHeading = points[0].bearing
+            for i in 0..<(points.count - 1) {
+                let p1 = CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng)
+                let p2 = CLLocationCoordinate2D(latitude: points[i + 1].lat, longitude: points[i + 1].lng)
+                if !sameCoordinate(p1, p2) {
+                    lastValidHeading = computeHeading(from: p1, to: p2)
+                    break
+                }
+            }
+            for i in 0..<(points.count - 1) {
+                let p1 = CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng)
+                let p2 = CLLocationCoordinate2D(latitude: points[i + 1].lat, longitude: points[i + 1].lng)
+                if !sameCoordinate(p1, p2) {
+                    lastValidHeading = computeHeading(from: p1, to: p2)
+                }
+                segmentHeadings.append(lastValidHeading)
+            }
+        }
+    }
+
+    private func shortestAngle(from: Double, to: Double) -> Double {
+        var diff = (to - from).truncatingRemainder(dividingBy: 360.0)
+        if diff > 180.0 { diff -= 360.0 }
+        if diff < -180.0 { diff += 360.0 }
+        return diff
     }
 
     func setupInitialState() {
@@ -124,25 +166,25 @@ class PlaybackManager: NSObject {
         
         let firstPos = CLLocationCoordinate2D(latitude: points[0].lat, longitude: points[0].lng)
         let initialHeading: Double = {
-            if points.count > 1 {
-                return computeHeading(
-                    from: firstPos,
-                    to: CLLocationCoordinate2D(latitude: points[1].lat, longitude: points[1].lng)
-                )
+            if !segmentHeadings.isEmpty {
+                return segmentHeadings[0]
             }
             return points[0].bearing
         }()
         
         vehicleMarker?.map = nil
+        lastAppliedIcon = nil
         let marker = GMSMarker(position: firstPos)
         marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
         marker.isFlat = true
         marker.zIndex = 10
         marker.map = mapView
-        marker.icon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+        let initialIcon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+        marker.icon = initialIcon
+        lastAppliedIcon = initialIcon
         vehicleMarker = marker
 
-        applyVehicleAppearance(heading: initialHeading)
+        applyVehicleAppearance(heading: playbackSettings.dynamicRotation ? initialHeading : points[0].bearing)
 
         progressPolyline?.map = nil
         if playbackSettings.drawTrail {
@@ -157,6 +199,11 @@ class PlaybackManager: NSObject {
 
         if playbackSettings.showStops { renderStops() }
         
+        currentSegmentIndex = 0
+        currentSegmentFraction = 0.0
+        isTurning = false
+        turnProgress = 0.0
+
         mapView.animate(to: GMSCameraPosition.camera(withTarget: firstPos, zoom: 16))
         
         if playbackSettings.autoStart {
@@ -165,7 +212,13 @@ class PlaybackManager: NSObject {
     }
 
     func play() {
-        if totalDistance <= 0 || isPlaying { return }
+        if totalDistance <= 0 || points.count < 2 || isPlaying { return }
+        if currentSegmentIndex >= points.count - 1 {
+            currentSegmentIndex = 0
+            currentSegmentFraction = 0.0
+            isTurning = false
+            turnProgress = 0.0
+        }
         isPlaying = true
         startAnimation()
         channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "playing"])
@@ -179,53 +232,268 @@ class PlaybackManager: NSObject {
             return
         }
 
-        // Keep the exact same duration math used on Android (ValueAnimator):
-        // durationMs = (((remainingDistance / baseSpeed) * 1000) / playbackSpeed).toLong()
-        let remainingDistance = max(totalDistance - currentGlobalDistance, 0)
-        let rawDurationMs = ((remainingDistance / playbackSettings.baseSpeed) * 1000.0) / Double(playbackSpeed)
-        animationDurationMs = Int64(rawDurationMs)
+        if playbackSettings.useSnappedRoute && !snappedSegments.isEmpty {
+            let remainingDistance = max(totalDistance - currentGlobalDistance, 0)
+            let rawDurationMs = ((remainingDistance / playbackSettings.baseSpeed) * 1000.0) / Double(playbackSpeed)
+            animationDurationMs = Int64(rawDurationMs)
 
-        if animationDurationMs <= 0 {
-            currentGlobalDistance = totalDistance
-            updateVehiclePosition(totalDistance)
-            isPlaying = false
-            channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "finished"])
+            if animationDurationMs <= 0 {
+                currentGlobalDistance = totalDistance
+                updateVehiclePosition(totalDistance)
+                isPlaying = false
+                channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "finished"])
+                return
+            }
+
+            startTime = CACurrentMediaTime()
+            distanceAtStartOfAnimation = currentGlobalDistance
+
+            displayLink = CADisplayLink(target: self, selector: #selector(animationStep))
+            displayLink?.add(to: .main, forMode: .common)
             return
         }
 
-        startTime = CACurrentMediaTime()
-        distanceAtStartOfAnimation = currentGlobalDistance
-
+        lastFrameTimeMs = 0.0
         displayLink = CADisplayLink(target: self, selector: #selector(animationStep))
         displayLink?.add(to: .main, forMode: .common)
     }
 
     @objc private func animationStep() {
-        if !isPlaying { return }
+        if !isPlaying || points.count < 2 { return }
 
-        let elapsedMs = Int64((CACurrentMediaTime() - startTime) * 1000.0)
-        let fraction = min(max(Double(elapsedMs) / Double(animationDurationMs), 0), 1)
-        currentGlobalDistance = distanceAtStartOfAnimation + (totalDistance - distanceAtStartOfAnimation) * fraction
-        
-        if currentGlobalDistance >= totalDistance {
-            currentGlobalDistance = totalDistance
-            updateVehiclePosition(totalDistance)
-            isPlaying = false
-            stopDisplayLink()
-            channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "finished"])
+        if playbackSettings.useSnappedRoute && !snappedSegments.isEmpty {
+            let elapsedMs = Int64((CACurrentMediaTime() - startTime) * 1000.0)
+            let fraction = min(max(Double(elapsedMs) / Double(animationDurationMs), 0), 1)
+            currentGlobalDistance = distanceAtStartOfAnimation + (totalDistance - distanceAtStartOfAnimation) * fraction
+            
+            if currentGlobalDistance >= totalDistance {
+                currentGlobalDistance = totalDistance
+                updateVehiclePosition(totalDistance)
+                isPlaying = false
+                stopDisplayLink()
+                channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "finished"])
+                return
+            }
+            
+            updateVehiclePosition(currentGlobalDistance)
+            
+            let idx = getSegmentIndexForDistance(currentGlobalDistance)
+            let segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
+            let localT = segmentDist > 0 ? (currentGlobalDistance - cumulativeDistances[idx]) / segmentDist : 0.0
+            channel.invokeMethod("onProgress", arguments: ["index": Double(idx) + localT])
+
+            if playbackSettings.showStops && points[idx].isStop && idx != lastStopIndexPassed {
+                lastStopIndexPassed = idx
+                pauseForStop(idx)
+            }
             return
         }
-        
-        updateVehiclePosition(currentGlobalDistance)
-        
-        let idx = getSegmentIndexForDistance(currentGlobalDistance)
-        let segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
-        let localT = segmentDist > 0 ? (currentGlobalDistance - cumulativeDistances[idx]) / segmentDist : 0.0
-        channel.invokeMethod("onProgress", arguments: ["index": Double(idx) + localT])
 
-        if playbackSettings.showStops && points[idx].isStop && idx != lastStopIndexPassed {
-            lastStopIndexPassed = idx
-            pauseForStop(idx)
+        let nowMs = CACurrentMediaTime() * 1000.0
+        if lastFrameTimeMs <= 0.0 {
+            lastFrameTimeMs = nowMs
+            return
+        }
+
+        let dtMs = min(max(nowMs - lastFrameTimeMs, 0.0), 100.0)
+        lastFrameTimeMs = nowMs
+
+        if isTurning {
+            turnProgress += dtMs / turnDurationMs
+            let pos = CLLocationCoordinate2D(latitude: points[currentSegmentIndex].lat, longitude: points[currentSegmentIndex].lng)
+            if turnProgress < 1.0 {
+                let raw = (turnStartHeading + turnDeltaHeading * turnProgress).truncatingRemainder(dividingBy: 360.0)
+                let heading = (raw + 360.0).truncatingRemainder(dividingBy: 360.0)
+                CATransaction.begin()
+                CATransaction.setAnimationDuration(0.0)
+                CATransaction.setDisableActions(true)
+                vehicleMarker?.position = pos
+                applyVehicleAppearance(heading: heading)
+                CATransaction.commit()
+                if followEnabled {
+                    mapView.moveCamera(GMSCameraUpdate.setTarget(pos))
+                }
+                return
+            } else {
+                isTurning = false
+                turnProgress = 0.0
+                let finalHeading = (playbackSettings.dynamicRotation && currentSegmentIndex < segmentHeadings.count)
+                    ? segmentHeadings[currentSegmentIndex]
+                    : points[currentSegmentIndex].bearing
+                CATransaction.begin()
+                CATransaction.setAnimationDuration(0.0)
+                CATransaction.setDisableActions(true)
+                vehicleMarker?.position = pos
+                applyVehicleAppearance(heading: finalHeading)
+                CATransaction.commit()
+                if followEnabled {
+                    mapView.moveCamera(GMSCameraUpdate.setTarget(pos))
+                }
+                return
+            }
+        }
+
+        // Avança pontos duplicados na mesma coordenada (distância zero)
+        while currentSegmentIndex < points.count - 1 {
+            let p1 = points[currentSegmentIndex]
+            let p2 = points[currentSegmentIndex + 1]
+            let start = CLLocationCoordinate2D(latitude: p1.lat, longitude: p1.lng)
+            let end = CLLocationCoordinate2D(latitude: p2.lat, longitude: p2.lng)
+            let dist = distanceBetween(start, end)
+            if dist >= 0.01 { break }
+
+            checkStopAtPoint(currentSegmentIndex + 1)
+            if currentSegmentIndex + 1 >= points.count - 1 {
+                finishPlaybackAtLastPoint()
+                return
+            }
+            let nextIdx = currentSegmentIndex + 1
+            let inHeading = segmentHeadings[currentSegmentIndex]
+            let outHeading = segmentHeadings[nextIdx]
+            let diff = shortestAngle(from: inHeading, to: outHeading)
+            currentSegmentIndex = nextIdx
+            currentSegmentFraction = 0.0
+            if playbackSettings.canRotate && playbackSettings.dynamicRotation && abs(diff) > turnAngleThreshold {
+                isTurning = true
+                turnProgress = 0.0
+                turnStartHeading = inHeading
+                turnDeltaHeading = diff
+                return
+            }
+        }
+
+        let segIdx = currentSegmentIndex
+        let p1 = points[segIdx]
+        let p2 = points[segIdx + 1]
+        let start = CLLocationCoordinate2D(latitude: p1.lat, longitude: p1.lng)
+        let end = CLLocationCoordinate2D(latitude: p2.lat, longitude: p2.lng)
+        let dist = distanceBetween(start, end)
+
+        let baseDurationMs = playbackSettings.baseSpeed > 0 ? (dist / playbackSettings.baseSpeed) * 1000.0 : 0.0
+        let segmentDurationMs = playbackSpeed > 0 ? baseDurationMs / Double(playbackSpeed) : 0.0
+
+        if segmentDurationMs > 0.0 {
+            currentSegmentFraction += dtMs / segmentDurationMs
+        } else {
+            currentSegmentFraction = 1.0
+        }
+
+        if currentSegmentFraction < 1.0 {
+            let f = min(max(currentSegmentFraction, 0.0), 1.0)
+            let pos = CLLocationCoordinate2D(
+                latitude: start.latitude + (end.latitude - start.latitude) * f,
+                longitude: start.longitude + (end.longitude - start.longitude) * f
+            )
+            let heading = (playbackSettings.dynamicRotation && segIdx < segmentHeadings.count)
+                ? segmentHeadings[segIdx]
+                : p1.bearing
+
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.0)
+            CATransaction.setDisableActions(true)
+            vehicleMarker?.position = pos
+            applyVehicleAppearance(heading: heading)
+            CATransaction.commit()
+
+            if followEnabled {
+                mapView.moveCamera(GMSCameraUpdate.setTarget(pos))
+            }
+            updateTrail(lastPassedIndex: segIdx, currentPos: pos)
+
+            let now = CACurrentMediaTime()
+            if now - lastProgressEmitTime >= 0.03 {
+                lastProgressEmitTime = now
+                channel.invokeMethod("onProgress", arguments: ["index": Double(segIdx) + f])
+            }
+        } else {
+            // Completa obrigatoriamente a chegada até o ponto `end` antes de mudar de segmento
+            currentSegmentFraction = 1.0
+            let arriveHeading = (playbackSettings.dynamicRotation && segIdx < segmentHeadings.count)
+                ? segmentHeadings[segIdx]
+                : p1.bearing
+
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.0)
+            CATransaction.setDisableActions(true)
+            vehicleMarker?.position = end
+            applyVehicleAppearance(heading: arriveHeading)
+            CATransaction.commit()
+
+            if followEnabled {
+                mapView.moveCamera(GMSCameraUpdate.setTarget(end))
+            }
+            updateTrail(lastPassedIndex: segIdx + 1, currentPos: end)
+            channel.invokeMethod("onProgress", arguments: ["index": Double(segIdx + 1)])
+
+            checkStopAtPoint(segIdx + 1)
+
+            if segIdx + 1 >= points.count - 1 {
+                finishPlaybackAtLastPoint()
+                return
+            }
+
+            let nextIdx = segIdx + 1
+            let inHeading = segmentHeadings[segIdx]
+            let outHeading = segmentHeadings[nextIdx]
+            let diff = shortestAngle(from: inHeading, to: outHeading)
+
+            currentSegmentIndex = nextIdx
+            currentSegmentFraction = 0.0
+
+            if playbackSettings.canRotate && playbackSettings.dynamicRotation && abs(diff) > turnAngleThreshold {
+                isTurning = true
+                turnProgress = 0.0
+                turnStartHeading = inHeading
+                turnDeltaHeading = diff
+            }
+        }
+    }
+
+    private func finishPlaybackAtLastPoint() {
+        let lastIdx = points.count - 1
+        currentSegmentIndex = max(points.count - 2, 0)
+        currentSegmentFraction = 1.0
+        isTurning = false
+        turnProgress = 0.0
+        let lastPoint = CLLocationCoordinate2D(latitude: points[lastIdx].lat, longitude: points[lastIdx].lng)
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.0)
+        CATransaction.setDisableActions(true)
+        vehicleMarker?.position = lastPoint
+        CATransaction.commit()
+        if followEnabled {
+            mapView.moveCamera(GMSCameraUpdate.setTarget(lastPoint))
+        }
+        updateTrail(lastPassedIndex: lastIdx, currentPos: lastPoint)
+        isPlaying = false
+        stopDisplayLink()
+        channel.invokeMethod("onProgress", arguments: ["index": Double(lastIdx)])
+        channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "finished"])
+    }
+
+    private func updateTrail(lastPassedIndex: Int, currentPos: CLLocationCoordinate2D) {
+        guard playbackSettings.drawTrail else { return }
+        let path = GMSMutablePath()
+        let limit = min(lastPassedIndex, points.count - 1)
+        if limit >= 0 {
+            for i in 0...limit {
+                path.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
+            }
+        }
+        if path.count() == 0 || !sameCoordinate(path.coordinate(at: path.count() - 1), currentPos) {
+            path.add(currentPos)
+        }
+        progressPolyline?.path = path
+    }
+
+    private func checkStopAtPoint(_ pointIndex: Int) {
+        guard pointIndex >= 0 && pointIndex < points.count else { return }
+        if playbackSettings.showStops && points[pointIndex].isStop {
+            checkAndAddStop(pointIndex)
+            if pointIndex != lastStopIndexPassed {
+                lastStopIndexPassed = pointIndex
+                pauseForStop(pointIndex)
+            }
         }
     }
 
@@ -233,6 +501,8 @@ class PlaybackManager: NSObject {
         isPlaying = false
         isPausedForStop = false
         stopDisplayLink()
+        let currentIdx = Double(currentSegmentIndex) + min(max(currentSegmentFraction, 0.0), 1.0)
+        channel.invokeMethod("onProgress", arguments: ["index": currentIdx])
         channel.invokeMethod("onPlaybackStatusChanged", arguments: ["status": "paused"])
     }
 
@@ -276,26 +546,41 @@ class PlaybackManager: NSObject {
         }
         maxRenderedStopIndex = idx - 1  // Não reconstrói stops além deste índice
 
-        // Inicializa polyline vazia, será preenchida em updateVehiclePosition
-        trailPath = GMSMutablePath()
-        if snappedSegments.isEmpty {
-            for i in 0..<idx {
-                trailPath.add(CLLocationCoordinate2D(latitude: points[i].lat, longitude: points[i].lng))
-            }
-            lastTrailIdx = idx - 1
-            progressPolyline?.path = trailPath
-        } else {
-            lastTrailIdx = -1
-            progressPolyline?.path = trailPath
+        let targetPoint = CLLocationCoordinate2D(latitude: points[idx].lat, longitude: points[idx].lng)
+        currentSegmentIndex = min(idx, max(points.count - 2, 0))
+        currentSegmentFraction = idx >= points.count - 1 ? 1.0 : 0.0
+        isTurning = false
+        turnProgress = 0.0
+
+        let segHeading = currentSegmentIndex < segmentHeadings.count ? segmentHeadings[currentSegmentIndex] : points[idx].bearing
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.0)
+        CATransaction.setDisableActions(true)
+        vehicleMarker?.position = targetPoint
+        applyVehicleAppearance(heading: playbackSettings.dynamicRotation ? segHeading : points[idx].bearing)
+        CATransaction.commit()
+
+        if followEnabled {
+            mapView.moveCamera(GMSCameraUpdate.setTarget(targetPoint))
         }
 
-        updateVehiclePosition(currentGlobalDistance)  // adiciona a posição interpolada atual
+        if playbackSettings.useSnappedRoute && !snappedSegments.isEmpty {
+            trailPath = GMSMutablePath()
+            lastTrailIdx = -1
+            progressPolyline?.path = trailPath
+            updateVehiclePosition(currentGlobalDistance)
+        } else {
+            updateTrail(lastPassedIndex: idx, currentPos: targetPoint)
+        }
+
         channel.invokeMethod("onProgress", arguments: ["index": Double(idx)])
     }
 
     func setSpeed(_ speed: Int) {
+        if playbackSpeed == speed { return }
+        let wasPlaying = isPlaying
         playbackSpeed = speed
-        if isPlaying {
+        if playbackSettings.useSnappedRoute && !snappedSegments.isEmpty && wasPlaying {
             pause()
             play()
         }
@@ -322,7 +607,6 @@ class PlaybackManager: NSObject {
             )
         }
         
-        vehicleMarker?.position = pos
         let heading: Double
         if let snappedProgress {
             heading = snappedProgress.heading
@@ -337,7 +621,13 @@ class PlaybackManager: NSObject {
         } else {
             heading = points[idx].bearing
         }
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.0)
+        CATransaction.setDisableActions(true)
+        vehicleMarker?.position = pos
         applyVehicleAppearance(heading: heading)
+        CATransaction.commit()
 
         if followEnabled {
             mapView.moveCamera(GMSCameraUpdate.setTarget(pos))
@@ -688,9 +978,13 @@ class PlaybackManager: NSObject {
 
     private func renderStops() {
         // Renderiza apenas os stops já passados
-        let currentIdx = getSegmentIndexForDistance(currentGlobalDistance)
-        for i in 0...currentIdx {
-            if points[i].isStop { checkAndAddStop(i) }
+        let currentIdx = (playbackSettings.useSnappedRoute && !snappedSegments.isEmpty)
+            ? getSegmentIndexForDistance(currentGlobalDistance)
+            : currentSegmentIndex
+        if currentIdx >= 0 {
+            for i in 0...min(currentIdx, points.count - 1) {
+                if points[i].isStop { checkAndAddStop(i) }
+            }
         }
     }
 
@@ -751,19 +1045,32 @@ class PlaybackManager: NSObject {
 
         if playbackSettings.canRotate {
             vehicleMarker.rotation = heading
-            vehicleMarker.icon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+            let targetIcon = vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan)
+            if lastAppliedIcon !== targetIcon {
+                vehicleMarker.icon = targetIcon
+                lastAppliedIcon = targetIcon
+            }
             return
         }
 
         let isGoingLeft = heading > 180.0
         vehicleMarker.rotation = 0
-        vehicleMarker.icon = isGoingLeft
+        let targetIcon = isGoingLeft
             ? (vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan))
             : (vehicleIconFlipped ?? vehicleIconNormal ?? GMSMarker.markerImage(with: .cyan))
+        if lastAppliedIcon !== targetIcon {
+            vehicleMarker.icon = targetIcon
+            lastAppliedIcon = targetIcon
+        }
     }
 
     private func reset() {
         stopDisplayLink()
+        currentSegmentIndex = 0
+        currentSegmentFraction = 0.0
+        isTurning = false
+        turnProgress = 0.0
+        lastFrameTimeMs = 0.0
         currentGlobalDistance = 0.0
         isPlaying = false
         isPausedForStop = false
@@ -771,6 +1078,7 @@ class PlaybackManager: NSObject {
         lastTrailIdx = -1
         trailPath = GMSMutablePath()
         maxRenderedStopIndex = -1
+        lastAppliedIcon = nil
         vehicleMarker?.map = nil
         vehicleMarker = nil
         progressPolyline?.map = nil
