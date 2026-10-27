@@ -102,6 +102,9 @@ class PlaybackManager(
     private var lastTrailIdx = -1
     private val trailPoints = mutableListOf<LatLng>()
     private var lastProgressEmitTimeMs = 0L
+    private var segmentHeadings = FloatArray(0)
+    private var segmentDistances = DoubleArray(0)
+    private var lastRenderedSegmentIndex = -1
     
     private var currentGlobalDistance = 0.0
     private var playbackSpeed = 1
@@ -177,6 +180,8 @@ class PlaybackManager(
                 points[i].bearing.toFloat()
             }
         }
+        this.segmentHeadings = segmentHeadings
+        this.segmentDistances = segmentDistances
 
         val effectiveTurnDuration = getEffectiveTurnDurationMs()
 
@@ -299,6 +304,7 @@ class PlaybackManager(
         progressPolyline?.remove()
         trailPoints.clear()
         lastTrailIdx = -1
+        lastRenderedSegmentIndex = 0
         if (playbackSettings.drawTrail) {
             progressPolyline = googleMap.addPolyline(PolylineOptions().width(5f * density).color(Convert.toColor(playbackSettings.polylineColor)).zIndex(2f).geodesic(false))
         }
@@ -456,6 +462,7 @@ class PlaybackManager(
             stopMarkers.remove(key)
         }
         maxRenderedStopIndex = safeIndex - 1  // Não reconstrói stops além deste índice
+        lastRenderedSegmentIndex = safeIndex
 
         trailPoints.clear()
         if (playbackSettings.drawTrail) {
@@ -531,17 +538,33 @@ class PlaybackManager(
                 val rawHeading = (step.startHeading + step.deltaHeading * t) % 360f
                 heading = (rawHeading + 360f) % 360f
                 currentPointIdx = step.pointIndex
+                lastRenderedSegmentIndex = step.pointIndex
             }
             is TimelineStep.Move -> {
-                val t = if (step.durationMs > 0) {
-                    ((clampedTime - step.startTimeMs) / step.durationMs).toFloat().coerceIn(0f, 1f)
-                } else 1f
-                pos = LatLng(
-                    step.startPoint.latitude + (step.endPoint.latitude - step.startPoint.latitude) * t,
-                    step.startPoint.longitude + (step.endPoint.longitude - step.startPoint.longitude) * t
-                )
-                heading = step.heading
-                currentPointIdx = step.segmentIndex
+                if (lastRenderedSegmentIndex in 0 until step.segmentIndex) {
+                    val vertexIndex = (lastRenderedSegmentIndex + 1).coerceAtMost(points.size - 1)
+                    pos = LatLng(points[vertexIndex].lat, points[vertexIndex].lng)
+                    val prevHeading = segmentHeadings.getOrElse(lastRenderedSegmentIndex) { step.heading }
+                    val nextHeading = segmentHeadings.getOrElse(vertexIndex) { prevHeading }
+                    val diff = shortestAngle(prevHeading, nextHeading)
+                    heading = (prevHeading + diff * 0.5f + 360f) % 360f
+                    currentPointIdx = vertexIndex
+                    lastRenderedSegmentIndex = vertexIndex
+                } else {
+                    val t = if (step.durationMs > 0) {
+                        ((clampedTime - step.startTimeMs) / step.durationMs).toFloat().coerceIn(0f, 1f)
+                    } else 1f
+                    pos = LatLng(
+                        step.startPoint.latitude + (step.endPoint.latitude - step.startPoint.latitude) * t,
+                        step.startPoint.longitude + (step.endPoint.longitude - step.startPoint.longitude) * t
+                    )
+                    val nextHeading = if (step.segmentIndex + 1 < segmentHeadings.size) segmentHeadings[step.segmentIndex + 1] else step.heading
+                    val turnProgress = ((t - 0.70f) / 0.30f).coerceIn(0f, 1f)
+                    val diff = shortestAngle(step.heading, nextHeading)
+                    heading = (step.heading + diff * turnProgress + 360f) % 360f
+                    currentPointIdx = step.segmentIndex
+                    lastRenderedSegmentIndex = step.segmentIndex
+                }
             }
         }
 
@@ -1061,6 +1084,7 @@ class PlaybackManager(
         trailPoints.clear()
         lastTrailIdx = -1
         lastProgressEmitTimeMs = 0L
+        lastRenderedSegmentIndex = -1
         vehicleMarker?.remove()
         vehicleMarker = null
         progressPolyline?.remove()

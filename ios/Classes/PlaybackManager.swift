@@ -103,6 +103,9 @@ class PlaybackManager: NSObject {
     private var progressPolyline: GMSPolyline?
     private var stopMarkers: [Int: GMSMarker] = [:]
     private var lastProgressEmitTime: CFTimeInterval = 0
+    private var segmentHeadings: [Double] = []
+    private var segmentDistances: [Double] = []
+    private var lastRenderedSegmentIndex: Int = -1
     
     private var currentGlobalDistance: Double = 0.0
     private var playbackSpeed: Int = 1
@@ -179,6 +182,8 @@ class PlaybackManager: NSObject {
                 segmentHeadings.append(points[i].bearing)
             }
         }
+        self.segmentHeadings = segmentHeadings
+        self.segmentDistances = segmentDistances
 
         let effectiveTurnDuration = getEffectiveTurnDurationMs()
 
@@ -304,6 +309,7 @@ class PlaybackManager: NSObject {
         applyVehicleAppearance(heading: initialHeading)
 
         progressPolyline?.map = nil
+        lastRenderedSegmentIndex = 0
         if playbackSettings.drawTrail {
             let poly = GMSPolyline()
             poly.strokeWidth = 6
@@ -517,6 +523,7 @@ class PlaybackManager: NSObject {
             stopMarkers.removeValue(forKey: key)
         }
         maxRenderedStopIndex = idx - 1  // Não reconstrói stops além deste índice
+        lastRenderedSegmentIndex = idx
 
         if playbackSettings.useSnappedRoute && !snappedSegments.isEmpty {
             currentGlobalDistance = cumulativeDistances[idx]
@@ -590,15 +597,31 @@ class PlaybackManager: NSObject {
             let rawHeading = (startHeading + deltaHeading * t).truncatingRemainder(dividingBy: 360.0)
             heading = (rawHeading + 360.0).truncatingRemainder(dividingBy: 360.0)
             currentPointIdx = ptIdx
+            lastRenderedSegmentIndex = ptIdx
 
         case .move(let startMs, let durMs, let segIdx, let startPoint, let endPoint, let segHeading):
-            let t = durMs > 0 ? min(max((clampedTime - startMs) / durMs, 0.0), 1.0) : 1.0
-            pos = CLLocationCoordinate2D(
-                latitude: startPoint.latitude + (endPoint.latitude - startPoint.latitude) * t,
-                longitude: startPoint.longitude + (endPoint.longitude - startPoint.longitude) * t
-            )
-            heading = segHeading
-            currentPointIdx = segIdx
+            if lastRenderedSegmentIndex >= 0 && lastRenderedSegmentIndex < segIdx {
+                let vertexIndex = min(lastRenderedSegmentIndex + 1, points.count - 1)
+                pos = CLLocationCoordinate2D(latitude: points[vertexIndex].lat, longitude: points[vertexIndex].lng)
+                let prevHeading = (lastRenderedSegmentIndex < segmentHeadings.count) ? segmentHeadings[lastRenderedSegmentIndex] : segHeading
+                let nextHeading = (vertexIndex < segmentHeadings.count) ? segmentHeadings[vertexIndex] : prevHeading
+                let diff = shortestAngle(from: prevHeading, to: nextHeading)
+                heading = (prevHeading + diff * 0.5 + 360.0).truncatingRemainder(dividingBy: 360.0)
+                currentPointIdx = vertexIndex
+                lastRenderedSegmentIndex = vertexIndex
+            } else {
+                let t = durMs > 0 ? min(max((clampedTime - startMs) / durMs, 0.0), 1.0) : 1.0
+                pos = CLLocationCoordinate2D(
+                    latitude: startPoint.latitude + (endPoint.latitude - startPoint.latitude) * t,
+                    longitude: startPoint.longitude + (endPoint.longitude - startPoint.longitude) * t
+                )
+                let nextHeading = (segIdx + 1 < segmentHeadings.count) ? segmentHeadings[segIdx + 1] : segHeading
+                let turnProgress = min(max((t - 0.70) / 0.30, 0.0), 1.0)
+                let diff = shortestAngle(from: segHeading, to: nextHeading)
+                heading = (segHeading + diff * turnProgress + 360.0).truncatingRemainder(dividingBy: 360.0)
+                currentPointIdx = segIdx
+                lastRenderedSegmentIndex = segIdx
+            }
         }
 
         vehicleMarker?.position = pos
@@ -1090,6 +1113,7 @@ class PlaybackManager: NSObject {
         lastStopIndexPassed = -1
         maxRenderedStopIndex = -1
         lastAppliedIcon = nil
+        lastRenderedSegmentIndex = -1
         vehicleMarker?.map = nil
         vehicleMarker = nil
         progressPolyline?.map = nil
