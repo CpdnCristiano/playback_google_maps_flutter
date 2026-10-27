@@ -308,18 +308,18 @@ class PlaybackManager: NSObject {
         let t = segmentDist > 0 ? (distance - cumulativeDistances[idx]) / segmentDist : 0.0
         let snappedProgress = playbackSettings.useSnappedRoute ? getProgressOnSnappedSegment(idx, segmentT: t) : nil
         
+        let clampedT = min(max(t, 0.0), 1.0)
+        let p1 = points[idx]
+        let p2 = points[idx + 1]
+
         let pos: CLLocationCoordinate2D
         if let snappedProgress {
             pos = snappedProgress.position
         } else {
-            // Fallback: interpolar entre pontos originais (Catmull-Rom)
-            let clampedT = min(max(t, 0.0), 1.0)
-            let p1 = points[idx]
-            let p2 = points[idx + 1]
-            let p0 = idx > 0 ? points[idx - 1] : p1
-            let p3 = idx + 2 < points.count ? points[idx + 2] : p2
-            
-            pos = interpolateCatmullRom(p0: p0, p1: p1, p2: p2, p3: p3, t: clampedT)
+            pos = CLLocationCoordinate2D(
+                latitude: p1.lat + (p2.lat - p1.lat) * clampedT,
+                longitude: p1.lng + (p2.lng - p1.lng) * clampedT
+            )
         }
         
         vehicleMarker?.position = pos
@@ -327,12 +327,13 @@ class PlaybackManager: NSObject {
         if let snappedProgress {
             heading = snappedProgress.heading
         } else if playbackSettings.dynamicRotation {
-            let clampedT = min(max(t, 0.0), 1.0)
-            let p1 = points[idx]
-            let p2 = points[idx + 1]
-            let p0 = idx > 0 ? points[idx - 1] : p1
-            let p3 = idx + 2 < points.count ? points[idx + 2] : p2
-            heading = getCatmullRomHeading(p0: p0, p1: p1, p2: p2, p3: p3, t: clampedT)
+            let start = CLLocationCoordinate2D(latitude: p1.lat, longitude: p1.lng)
+            let end = CLLocationCoordinate2D(latitude: p2.lat, longitude: p2.lng)
+            if !sameCoordinate(start, end) {
+                heading = computeHeading(from: start, to: end)
+            } else {
+                heading = p1.bearing
+            }
         } else {
             heading = points[idx].bearing
         }
@@ -781,25 +782,6 @@ class PlaybackManager: NSObject {
     func dispose() {
         stopDisplayLink()
         reset()
-    }
-
-    private func interpolateCatmullRom(p0: GoogleMapsPlaybackPoint, p1: GoogleMapsPlaybackPoint, p2: GoogleMapsPlaybackPoint, p3: GoogleMapsPlaybackPoint, t: Double) -> CLLocationCoordinate2D {
-        let t2 = t * t
-        let t3 = t2 * t
-        
-        let lat = 0.5 * ((2 * p1.lat) + (-p0.lat + p2.lat) * t + (2 * p0.lat - 5 * p1.lat + 4 * p2.lat - p3.lat) * t2 + (-p0.lat + 3 * p1.lat - 3 * p2.lat + p3.lat) * t3)
-        let lng = 0.5 * ((2 * p1.lng) + (-p0.lng + p2.lng) * t + (2 * p0.lng - 5 * p1.lng + 4 * p2.lng - p3.lng) * t2 + (-p0.lng + 3 * p1.lng - 3 * p2.lng + p3.lng) * t3)
-        
-        return CLLocationCoordinate2D(latitude: lat, longitude: lng)
-    }
-
-    private func getCatmullRomHeading(p0: GoogleMapsPlaybackPoint, p1: GoogleMapsPlaybackPoint, p2: GoogleMapsPlaybackPoint, p3: GoogleMapsPlaybackPoint, t: Double) -> Double {
-        let t2 = t * t
-        
-        let dLat = 0.5 * ((-p0.lat + p2.lat) + 2 * (2 * p0.lat - 5 * p1.lat + 4 * p2.lat - p3.lat) * t + 3 * (-p0.lat + 3 * p1.lat - 3 * p2.lat + p3.lat) * t2)
-        let dLng = 0.5 * ((-p0.lng + p2.lng) + 2 * (2 * p0.lng - 5 * p1.lng + 4 * p2.lng - p3.lng) * t + 3 * (-p0.lng + 3 * p1.lng - 3 * p2.lng + p3.lng) * t2)
-        
-        return (atan2(dLng, dLat) * 180.0 / .pi + 360).truncatingRemainder(dividingBy: 360)
     }
 }
 
