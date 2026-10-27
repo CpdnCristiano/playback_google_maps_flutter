@@ -376,7 +376,8 @@ class PlaybackManager(
         lastFrameTimeMs = nowMs
 
         if (isTurning) {
-            turnProgress += dtMs / turnDurationMs
+            val effectiveTurnDurationMs = if (playbackSpeed > 0) turnDurationMs / playbackSpeed else turnDurationMs
+            turnProgress += if (effectiveTurnDurationMs > 0.0) dtMs / effectiveTurnDurationMs else 1.0
             val pos = LatLng(points[currentSegmentIndex].lat, points[currentSegmentIndex].lng)
             if (turnProgress < 1.0) {
                 val raw = (turnStartHeading + turnDeltaHeading * turnProgress.toFloat()) % 360f

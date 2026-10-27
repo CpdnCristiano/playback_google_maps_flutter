@@ -299,7 +299,8 @@ class PlaybackManager: NSObject {
         lastFrameTimeMs = nowMs
 
         if isTurning {
-            turnProgress += dtMs / turnDurationMs
+            let effectiveTurnDurationMs = playbackSpeed > 0 ? turnDurationMs / Double(playbackSpeed) : turnDurationMs
+            turnProgress += effectiveTurnDurationMs > 0.0 ? (dtMs / effectiveTurnDurationMs) : 1.0
             let pos = CLLocationCoordinate2D(latitude: points[currentSegmentIndex].lat, longitude: points[currentSegmentIndex].lng)
             if turnProgress < 1.0 {
                 let raw = (turnStartHeading + turnDeltaHeading * turnProgress).truncatingRemainder(dividingBy: 360.0)
