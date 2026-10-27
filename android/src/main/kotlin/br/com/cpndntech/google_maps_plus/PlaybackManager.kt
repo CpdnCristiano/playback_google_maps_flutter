@@ -43,8 +43,43 @@ class PlaybackManager(
         val distance: Double
     )
 
+    private sealed class TimelineStep {
+        abstract val startTimeMs: Double
+        abstract val durationMs: Double
+        val endTimeMs: Double get() = startTimeMs + durationMs
+
+        data class Move(
+            override val startTimeMs: Double,
+            override val durationMs: Double,
+            val segmentIndex: Int,
+            val startPoint: LatLng,
+            val endPoint: LatLng,
+            val heading: Float
+        ) : TimelineStep()
+
+        data class Turn(
+            override val startTimeMs: Double,
+            override val durationMs: Double,
+            val pointIndex: Int,
+            val position: LatLng,
+            val startHeading: Float,
+            val deltaHeading: Float
+        ) : TimelineStep()
+    }
+
     var playbackSettings = PlaybackSettings()
+        set(value) {
+            field = value
+            buildTimeline()
+        }
     
+    private val turnDurationMs = 300.0
+    private val turnAngleThreshold = 30.0
+    private var timelineSteps: List<TimelineStep> = emptyList()
+    private var totalTimelineDurationMs: Double = 0.0
+    private var currentTimelineTimeMs: Double = 0.0
+    private val stepStartTimesForPointIndex = mutableMapOf<Int, Double>()
+
     private var points: List<GoogleMapsPlaybackPoint> = emptyList()
     private var snappedRoute: List<LatLng> = emptyList()  // Rota completa da Valhalla
     private var routeAnchors: List<RouteAnchor> = emptyList()
@@ -66,8 +101,6 @@ class PlaybackManager(
         private set
     private var isPausedForStop = false
     private var lastStopIndexPassed = -1
-    private var lastTrailIdx = -1
-    private val trailPoints = mutableListOf<LatLng>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var maxRenderedStopIndex = -1  // Controla até qual índice renderizar stops
 
@@ -79,6 +112,7 @@ class PlaybackManager(
     fun setPoints(newPoints: List<GoogleMapsPlaybackPoint>) {
         this.points = newPoints
         calculateDistances()
+        buildTimeline()
         buildSnappedSegments()
         reset()
         setupInitialState()  // Reconstrói o estado inicial com novos pontos
@@ -112,13 +146,104 @@ class PlaybackManager(
         }
     }
 
+    private fun buildTimeline() {
+        timelineSteps = emptyList()
+        stepStartTimesForPointIndex.clear()
+        totalTimelineDurationMs = 0.0
+        if (points.size < 2) return
+
+        val steps = mutableListOf<TimelineStep>()
+        var currentTime = 0.0
+        stepStartTimesForPointIndex[0] = 0.0
+
+        val segmentHeadings = FloatArray(points.size - 1)
+        val segmentDistances = DoubleArray(points.size - 1)
+        for (i in 0 until points.size - 1) {
+            val p1 = LatLng(points[i].lat, points[i].lng)
+            val p2 = LatLng(points[i + 1].lat, points[i + 1].lng)
+            segmentDistances[i] = distanceBetween(p1, p2)
+            segmentHeadings[i] = if (!sameCoordinate(p1, p2)) {
+                computeHeading(p1, p2)
+            } else {
+                points[i].bearing.toFloat()
+            }
+        }
+
+        for (i in 0 until points.size - 1) {
+            val p1 = LatLng(points[i].lat, points[i].lng)
+            val p2 = LatLng(points[i + 1].lat, points[i + 1].lng)
+            val dist = segmentDistances[i]
+            val heading = segmentHeadings[i]
+
+            // Se não é o primeiro segmento, checar se houve curva no waypoint i
+            if (i > 0) {
+                val prevHeading = segmentHeadings[i - 1]
+                val diff = shortestAngle(prevHeading, heading)
+                if (Math.abs(diff) >= turnAngleThreshold) {
+                    val turnStep = TimelineStep.Turn(
+                        startTimeMs = currentTime,
+                        durationMs = turnDurationMs,
+                        pointIndex = i,
+                        position = p1,
+                        startHeading = prevHeading,
+                        deltaHeading = diff
+                    )
+                    steps.add(turnStep)
+                    currentTime += turnDurationMs
+                }
+            }
+
+            stepStartTimesForPointIndex[i] = currentTime
+            val moveDuration = if (playbackSettings.baseSpeed > 0) {
+                (dist / playbackSettings.baseSpeed) * 1000.0
+            } else 0.0
+
+            val moveStep = TimelineStep.Move(
+                startTimeMs = currentTime,
+                durationMs = moveDuration,
+                segmentIndex = i,
+                startPoint = p1,
+                endPoint = p2,
+                heading = heading
+            )
+            steps.add(moveStep)
+            currentTime += moveDuration
+        }
+
+        stepStartTimesForPointIndex[points.size - 1] = currentTime
+        timelineSteps = steps
+        totalTimelineDurationMs = currentTime
+    }
+
+    private fun shortestAngle(from: Float, to: Float): Float {
+        var diff = (to - from) % 360f
+        if (diff > 180f) diff -= 360f
+        if (diff < -180f) diff += 360f
+        return diff
+    }
+
+    private fun getStepForTime(timeMs: Double): TimelineStep? {
+        if (timelineSteps.isEmpty()) return null
+        if (timeMs <= 0.0) return timelineSteps.first()
+        if (timeMs >= totalTimelineDurationMs) return timelineSteps.last()
+        for (step in timelineSteps) {
+            if (timeMs < step.endTimeMs) return step
+        }
+        return timelineSteps.last()
+    }
+
     fun setupInitialState() {
         if (points.isEmpty()) return
 
         prepareVehicleIcons()
         
         val firstPos = LatLng(points[0].lat, points[0].lng)
-        val initialHeading = if (points.size > 1) {
+        val initialHeading = if (timelineSteps.isNotEmpty()) {
+            when (val firstStep = timelineSteps.first()) {
+                is TimelineStep.Move -> firstStep.heading
+                is TimelineStep.Turn -> firstStep.startHeading
+            }
+        } else if (points.size > 1) {
             computeHeading(firstPos, LatLng(points[1].lat, points[1].lng))
         } else {
             points[0].bearing.toFloat()
@@ -147,35 +272,89 @@ class PlaybackManager(
         
         googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLngZoom(firstPos, 16f))
         
+        if (playbackSettings.useSnappedRoute && snappedSegments.isNotEmpty()) {
+            updateVehiclePosition(0.0)
+        } else {
+            updateTimelineState(0.0)
+        }
+
         if (playbackSettings.autoStart) {
             play()
         }
     }
 
     fun play() {
-        if (totalDistance <= 0 || isPlaying) return
+        if (isPlaying) return
+
+        if (playbackSettings.useSnappedRoute && snappedSegments.isNotEmpty()) {
+            if (totalDistance <= 0) return
+            isPlaying = true
+            val durationMs = (((totalDistance - currentGlobalDistance) / playbackSettings.baseSpeed) * 1000 / playbackSpeed).toLong()
+            playbackAnimator?.cancel()
+            playbackAnimator = ValueAnimator.ofFloat(currentGlobalDistance.toFloat(), totalDistance.toFloat()).apply {
+                duration = durationMs
+                interpolator = LinearInterpolator()
+                addUpdateListener { anim ->
+                    currentGlobalDistance = (anim.animatedValue as Float).toDouble()
+                    updateVehiclePosition(currentGlobalDistance)
+                    val idx = getSegmentIndexForDistance(currentGlobalDistance)
+                    val segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
+                    val localT = if (segmentDist > 0) (currentGlobalDistance - cumulativeDistances[idx]) / segmentDist else 0.0
+                    channel.invokeMethod("onProgress", mapOf("index" to idx.toDouble() + localT))
+
+                    if (playbackSettings.showStops && points[idx].isStop && idx != lastStopIndexPassed) {
+                        lastStopIndexPassed = idx
+                        pauseForStop(idx)
+                    }
+
+                    if (currentGlobalDistance >= totalDistance) {
+                        isPlaying = false
+                        channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "finished"))
+                    }
+                }
+                start()
+            }
+            channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "playing"))
+            return
+        }
+
+        if (totalTimelineDurationMs <= 0) return
         isPlaying = true
-        val durationMs = (((totalDistance - currentGlobalDistance) / playbackSettings.baseSpeed) * 1000 / playbackSpeed).toLong()
-        
+        val remainingDurationMs = ((totalTimelineDurationMs - currentTimelineTimeMs) / playbackSpeed).toLong()
+
+        if (remainingDurationMs <= 0) {
+            currentTimelineTimeMs = totalTimelineDurationMs
+            updateTimelineState(totalTimelineDurationMs)
+            isPlaying = false
+            channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "finished"))
+            return
+        }
+
         playbackAnimator?.cancel()
-        playbackAnimator = ValueAnimator.ofFloat(currentGlobalDistance.toFloat(), totalDistance.toFloat()).apply {
-            duration = durationMs
+        playbackAnimator = ValueAnimator.ofFloat(currentTimelineTimeMs.toFloat(), totalTimelineDurationMs.toFloat()).apply {
+            duration = remainingDurationMs
             interpolator = LinearInterpolator()
             addUpdateListener { anim ->
-                currentGlobalDistance = (anim.animatedValue as Float).toDouble()
-                updateVehiclePosition(currentGlobalDistance)
-                
-                val idx = getSegmentIndexForDistance(currentGlobalDistance)
-                val segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
-                val localT = if (segmentDist > 0) (currentGlobalDistance - cumulativeDistances[idx]) / segmentDist else 0.0
+                currentTimelineTimeMs = (anim.animatedValue as Float).toDouble()
+                updateTimelineState(currentTimelineTimeMs)
+
+                val step = getStepForTime(currentTimelineTimeMs)
+                val (idx, localT) = when (step) {
+                    is TimelineStep.Turn -> Pair(step.pointIndex, 0.0)
+                    is TimelineStep.Move -> {
+                        val t = if (step.durationMs > 0) ((currentTimelineTimeMs - step.startTimeMs) / step.durationMs).coerceIn(0.0, 1.0) else 0.0
+                        Pair(step.segmentIndex, t)
+                    }
+                    null -> Pair(0, 0.0)
+                }
                 channel.invokeMethod("onProgress", mapOf("index" to idx.toDouble() + localT))
 
                 if (playbackSettings.showStops && points[idx].isStop && idx != lastStopIndexPassed) {
                     lastStopIndexPassed = idx
                     pauseForStop(idx)
                 }
-                
-                if (currentGlobalDistance >= totalDistance) {
+
+                if (currentTimelineTimeMs >= totalTimelineDurationMs) {
                     isPlaying = false
                     channel.invokeMethod("onPlaybackStatusChanged", mapOf("status" to "finished"))
                 }
@@ -218,7 +397,6 @@ class PlaybackManager(
         pause()
         if (points.isEmpty()) return
         val safeIndex = index.coerceIn(0, points.size - 1)
-        currentGlobalDistance = cumulativeDistances[safeIndex]
         lastStopIndexPassed = safeIndex - 1  // permite que o stop nesse índice dispare a pausa ao retomar
 
         // Remove marcadores de parada que estão além do índice buscado
@@ -229,20 +407,13 @@ class PlaybackManager(
         }
         maxRenderedStopIndex = safeIndex - 1  // Não reconstrói stops além deste índice
 
-        // A trilha snapped é reconstruída no updateVehiclePosition; o fallback usa os pontos originais.
-        trailPoints.clear()
-        if (snappedSegments.isEmpty()) {
-            for (i in 0 until safeIndex) {
-                trailPoints.add(LatLng(points[i].lat, points[i].lng))
-            }
-            lastTrailIdx = safeIndex - 1
-            progressPolyline?.points = trailPoints.toList()
+        if (playbackSettings.useSnappedRoute && snappedSegments.isNotEmpty()) {
+            currentGlobalDistance = cumulativeDistances[safeIndex]
+            updateVehiclePosition(currentGlobalDistance)
         } else {
-            lastTrailIdx = -1
-            progressPolyline?.points = emptyList()
+            currentTimelineTimeMs = stepStartTimesForPointIndex[safeIndex] ?: 0.0
+            updateTimelineState(currentTimelineTimeMs)
         }
-
-        updateVehiclePosition(currentGlobalDistance)
         channel.invokeMethod("onProgress", mapOf("index" to safeIndex.toDouble()))
     }
 
@@ -254,40 +425,103 @@ class PlaybackManager(
         }
     }
 
+    private fun updateTimelineState(timeMs: Double) {
+        if (points.size < 2 || timelineSteps.isEmpty()) return
+        val clampedTime = timeMs.coerceIn(0.0, totalTimelineDurationMs)
+        val step = getStepForTime(clampedTime) ?: return
+
+        val pos: LatLng
+        val heading: Float
+        val currentPointIdx: Int
+
+        when (step) {
+            is TimelineStep.Turn -> {
+                val t = if (step.durationMs > 0) {
+                    ((clampedTime - step.startTimeMs) / step.durationMs).toFloat().coerceIn(0f, 1f)
+                } else 1f
+                pos = step.position
+                val rawHeading = (step.startHeading + step.deltaHeading * t) % 360f
+                heading = (rawHeading + 360f) % 360f
+                currentPointIdx = step.pointIndex
+            }
+            is TimelineStep.Move -> {
+                val t = if (step.durationMs > 0) {
+                    ((clampedTime - step.startTimeMs) / step.durationMs).toFloat().coerceIn(0f, 1f)
+                } else 1f
+                pos = LatLng(
+                    step.startPoint.latitude + (step.endPoint.latitude - step.startPoint.latitude) * t,
+                    step.startPoint.longitude + (step.endPoint.longitude - step.startPoint.longitude) * t
+                )
+                heading = step.heading
+                currentPointIdx = step.segmentIndex
+            }
+        }
+
+        vehicleMarker?.position = pos
+        val effectiveHeading = if (playbackSettings.dynamicRotation) {
+            heading
+        } else {
+            points[currentPointIdx].bearing.toFloat()
+        }
+        applyVehicleAppearance(effectiveHeading)
+
+        if (followEnabled) {
+            googleMap.moveCamera(com.google.android.gms.maps.CameraUpdateFactory.newLatLng(pos))
+        }
+
+        if (playbackSettings.drawTrail) {
+            val currentTrail = ArrayList<LatLng>(currentPointIdx + 2)
+            for (i in 0..currentPointIdx) {
+                currentTrail.add(LatLng(points[i].lat, points[i].lng))
+            }
+            if (currentTrail.isEmpty() || !sameCoordinate(currentTrail.last(), pos)) {
+                currentTrail.add(pos)
+            }
+            progressPolyline?.points = currentTrail
+        }
+
+        if (playbackSettings.showStops) {
+            if (currentPointIdx > maxRenderedStopIndex) {
+                maxRenderedStopIndex = currentPointIdx
+            }
+            for (i in 0..maxRenderedStopIndex) {
+                if (points[i].isStop) checkAndAddStop(i)
+            }
+        }
+    }
+
     private fun updateVehiclePosition(distance: Double) {
         if (points.size < 2) return
         val idx = getSegmentIndexForDistance(distance)
         val segmentDist = cumulativeDistances[idx + 1] - cumulativeDistances[idx]
         val t = if (segmentDist > 0) ((distance - cumulativeDistances[idx]) / segmentDist) else 0.0
+        val clampedT = t.toFloat().coerceIn(0f, 1f)
         val snappedProgress = if (playbackSettings.useSnappedRoute) getProgressOnSnappedSegment(idx, t) else null
         
-        // O veículo segue o subtrecho snapped correspondente ao trecho original A -> B (se habilitado).
+        val p1 = points[idx]
+        val p2 = points[idx + 1]
+
+        // O veículo segue o subtrecho snapped (se habilitado) ou linha reta entre os pontos originais.
         val pos = if (snappedProgress != null) {
             snappedProgress.position
         } else {
-            // Fallback: interpolar entre pontos originais (Catmull-Rom)
-            val clampedT = t.toFloat().coerceIn(0f, 1f)
-            
-            val p1 = points[idx]
-            val p2 = points[idx + 1]
-            val p0 = if (idx > 0) points[idx - 1] else p1
-            val p3 = if (idx + 2 < points.size) points[idx + 2] else p2
-            
-            interpolateCatmullRom(p0, p1, p2, p3, clampedT)
+            LatLng(
+                p1.lat + (p2.lat - p1.lat) * clampedT,
+                p1.lng + (p2.lng - p1.lng) * clampedT
+            )
         }
         
         vehicleMarker?.position = pos
         val heading = if (snappedProgress != null) {
             snappedProgress.heading
         } else if (playbackSettings.dynamicRotation) {
-            val clampedT = t.toFloat().coerceIn(0f, 1f)
-
-            val p1 = points[idx]
-            val p2 = points[idx + 1]
-            val p0 = if (idx > 0) points[idx - 1] else p1
-            val p3 = if (idx + 2 < points.size) points[idx + 2] else p2
-
-            getCatmullRomHeading(p0, p1, p2, p3, clampedT)
+            val start = LatLng(p1.lat, p1.lng)
+            val end = LatLng(p2.lat, p2.lng)
+            if (!sameCoordinate(start, end)) {
+                computeHeading(start, end)
+            } else {
+                p1.bearing.toFloat()
+            }
         } else {
             points[idx].bearing.toFloat()
         }
@@ -301,29 +535,14 @@ class PlaybackManager(
             if (snappedProgress != null) {
                 progressPolyline?.points = buildTrailFromSnappedRoute(idx, snappedProgress)
             } else {
-                if (trailPoints.isEmpty() && points.isNotEmpty()) {
-                    trailPoints.add(LatLng(points[0].lat, points[0].lng))
+                val currentTrail = ArrayList<LatLng>(idx + 2)
+                for (i in 0..idx) {
+                    currentTrail.add(LatLng(points[i].lat, points[i].lng))
                 }
-                if (idx > lastTrailIdx) {
-                    for (i in (lastTrailIdx + 1)..idx) {
-                        if (i < points.size) {
-                            val routePoint = LatLng(points[i].lat, points[i].lng)
-                            if (trailPoints.lastOrNull()?.let { !sameCoordinate(it, routePoint) } != false) {
-                                trailPoints.add(routePoint)
-                            }
-                        }
-                    }
-                    lastTrailIdx = idx
+                if (currentTrail.isEmpty() || !sameCoordinate(currentTrail.last(), pos)) {
+                    currentTrail.add(pos)
                 }
-
-                val lastTrailPoint = trailPoints.lastOrNull()
-                if (lastTrailPoint == null ||
-                    (!sameCoordinate(lastTrailPoint, pos) && distanceBetween(lastTrailPoint, pos) >= 1.0)
-                ) {
-                    trailPoints.add(pos)
-                }
-
-                progressPolyline?.points = trailPoints.toList()
+                progressPolyline?.points = currentTrail
             }
         }
         
@@ -713,12 +932,11 @@ class PlaybackManager(
         playbackAnimator?.cancel()
         mainHandler.removeCallbacksAndMessages(null)
         currentGlobalDistance = 0.0
+        currentTimelineTimeMs = 0.0
         isPlaying = false
         isPausedForStop = false
         lastStopIndexPassed = -1
-        lastTrailIdx = -1
         maxRenderedStopIndex = -1
-        trailPoints.clear()
         vehicleMarker?.remove()
         vehicleMarker = null
         progressPolyline?.remove()
@@ -730,25 +948,5 @@ class PlaybackManager(
     fun dispose() {
         playbackAnimator?.cancel()
         reset()
-    }
-
-    private fun interpolateCatmullRom(p0: GoogleMapsPlaybackPoint, p1: GoogleMapsPlaybackPoint, p2: GoogleMapsPlaybackPoint, p3: GoogleMapsPlaybackPoint, t: Float): LatLng {
-        val t2 = t * t
-        val t3 = t2 * t
-        
-        val lat = 0.5 * ((2 * p1.lat) + (-p0.lat + p2.lat) * t + (2 * p0.lat - 5 * p1.lat + 4 * p2.lat - p3.lat) * t2 + (-p0.lat + 3 * p1.lat - 3 * p2.lat + p3.lat) * t3)
-        val lng = 0.5 * ((2 * p1.lng) + (-p0.lng + p2.lng) * t + (2 * p0.lng - 5 * p1.lng + 4 * p2.lng - p3.lng) * t2 + (-p0.lng + 3 * p1.lng - 3 * p2.lng + p3.lng) * t3)
-        
-        return LatLng(lat, lng)
-    }
-
-    private fun getCatmullRomHeading(p0: GoogleMapsPlaybackPoint, p1: GoogleMapsPlaybackPoint, p2: GoogleMapsPlaybackPoint, p3: GoogleMapsPlaybackPoint, t: Float): Float {
-        val t2 = t * t
-        
-        // Derivative of Catmull-Rom
-        val dLat = 0.5 * ((-p0.lat + p2.lat) + 2 * (2 * p0.lat - 5 * p1.lat + 4 * p2.lat - p3.lat) * t + 3 * (-p0.lat + 3 * p1.lat - 3 * p2.lat + p3.lat) * t2)
-        val dLng = 0.5 * ((-p0.lng + p2.lng) + 2 * (2 * p0.lng - 5 * p1.lng + 4 * p2.lng - p3.lng) * t + 3 * (-p0.lng + 3 * p1.lng - 3 * p2.lng + p3.lng) * t2)
-        
-        return (Math.toDegrees(Math.atan2(dLng, dLat)).toFloat() + 360f) % 360f
     }
 }

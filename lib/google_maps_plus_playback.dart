@@ -153,7 +153,7 @@ class GoogleMapsPlusPlayback extends StatefulWidget {
   final GoogleMapsPlusPlaybackLoadingBuilder? loadingBuilder;
 
   /// Whether to use Valhalla snapping for realistic road-based animation.
-  /// Defaults to false (uses direct Catmull-Rom interpolation).
+  /// Defaults to false (uses direct linear interpolation in a straight line).
   /// Set to true to enable Valhalla snapping for realistic road-based movement.
   final bool useSnappedRoute;
 
